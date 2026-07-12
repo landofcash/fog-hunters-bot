@@ -1,0 +1,24 @@
+{
+  "name": "fhaibot",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev:api": "npm --prefix apps/api run dev",
+    "dev:bot": "npm --prefix apps/bot run dev",
+    "dev": "concurrently -n api,bot -c blue,green \"npm run dev:api\" \"npm run dev:bot\"",
+    "build": "npm --prefix apps/api run build && npm --prefix apps/bot run build",
+    "lint": "npm --prefix apps/api run lint && npm --prefix apps/bot run lint",
+    "test": "npm --prefix apps/api test && npm --prefix apps/bot test",
+    "test:integration": "npm --prefix apps/api run test:integration:local",
+    "test:coverage": "npm --prefix apps/api run test:coverage && npm --prefix apps/bot run test:coverage",
+    "check": "npm run lint && npm test && npm run build",
+    "check:integration": "npm run db:start && npm run db:migrate && npm run test:integration",
+    "db:start": "docker compose up -d --wait postgres",
+    "db:stop": "docker compose down",
+    "db:reset": "docker compose down -v",
+    "db:migrate": "npm --prefix apps/api run prisma:migrate:test"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
