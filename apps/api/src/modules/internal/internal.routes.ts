@@ -13,6 +13,8 @@ import {
 import { ApiError } from "../../lib/errors";
 import { requireInternalApiKey } from "../../middleware/internal-auth";
 import { LlmService } from "../llm/llm.service";
+import { getEffectivePrompts } from "../llm/prompts";
+import { sanitizeLlmSettingsForAudit } from "../llm/settings-audit";
 
 const guildParamsSchema = z.object({
   guildId: z.string().min(1),
@@ -165,7 +167,11 @@ export async function registerInternalRoutes(app: FastifyInstance): Promise<void
         commandKey: body.commandKey,
       });
 
-      return internalApp.repository.getOrCreateLlmGuildSettings(params.guildId);
+      const result = await internalApp.repository.getOrCreateLlmGuildSettings(params.guildId);
+      return {
+        ...result,
+        effectivePrompts: getEffectivePrompts(result.settings),
+      };
     });
 
     internalApp.patch("/guilds/:guildId/llm/settings", async (request) => {
@@ -180,11 +186,15 @@ export async function registerInternalRoutes(app: FastifyInstance): Promise<void
       });
 
       const before = await internalApp.repository.getOrCreateLlmGuildSettings(params.guildId);
+      const assistantPrompt = body.assistantPrompt !== undefined
+        ? body.assistantPrompt
+        : body.stylePrompt;
       const updated = await internalApp.repository.updateLlmGuildSettings({
         guildDiscordId: params.guildId,
         enabled: body.enabled,
         defaultModel: body.defaultModel,
-        stylePrompt: body.stylePrompt,
+        assistantPrompt,
+        gatekeeperPrompt: body.gatekeeperPrompt,
         retentionDays: body.retentionDays,
         dmEnabled: body.dmEnabled,
         maxInputChars: body.maxInputChars,
@@ -198,13 +208,14 @@ export async function registerInternalRoutes(app: FastifyInstance): Promise<void
         action: "llm.guild_settings.updated",
         entityType: "llm_guild_setting",
         entityId: updated.settings.id,
-        before: before.settings as unknown as Record<string, unknown>,
-        after: updated.settings as unknown as Record<string, unknown>,
+        before: sanitizeLlmSettingsForAudit(before.settings),
+        after: sanitizeLlmSettingsForAudit(updated.settings),
       });
 
       return {
         guild: updated.guild,
         settings: updated.settings,
+        effectivePrompts: getEffectivePrompts(updated.settings),
       };
     });
 

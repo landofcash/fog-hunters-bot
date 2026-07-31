@@ -132,7 +132,8 @@ export interface LlmGuildSettingsRecord {
   guildId: string;
   enabled: boolean;
   defaultModel: string;
-  stylePrompt?: string | null;
+  assistantPrompt?: string | null;
+  gatekeeperPrompt?: string | null;
   retentionDays: number;
   dmEnabled: boolean;
   maxInputChars: number;
@@ -313,7 +314,8 @@ export interface AppRepository {
     guildDiscordId: string;
     enabled?: boolean;
     defaultModel?: string;
-    stylePrompt?: string | null;
+    assistantPrompt?: string | null;
+    gatekeeperPrompt?: string | null;
     retentionDays?: number;
     dmEnabled?: boolean;
     maxInputChars?: number;

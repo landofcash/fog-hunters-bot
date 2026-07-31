@@ -27,7 +27,33 @@ describe("OpenAiProvider", () => {
     const [url, request] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://llm.test/v1/chat/completions");
     expect(request.headers).toMatchObject({ authorization: "Bearer secret" });
-    expect(JSON.parse(String(request.body))).toMatchObject({ model: "test-model", max_tokens: 42 });
+    expect(JSON.parse(String(request.body))).toEqual({
+      model: "test-model",
+      messages: input.messages,
+      max_tokens: 42,
+      temperature: 0.7,
+    });
+  });
+
+  it("uses GPT-5.6-compatible Chat Completions parameters", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: "Answer" } }],
+      usage: { prompt_tokens: 7, completion_tokens: 3 },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new OpenAiProvider("secret", "https://llm.test/v1").generateChat({
+      ...input,
+      model: "gpt-5.6-terra",
+    });
+
+    const [, request] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(request.body))).toEqual({
+      model: "gpt-5.6-terra",
+      messages: input.messages,
+      max_completion_tokens: 42,
+      reasoning_effort: "none",
+    });
   });
 
   it("maps provider and empty-response failures", async () => {

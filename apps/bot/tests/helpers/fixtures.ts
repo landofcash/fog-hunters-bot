@@ -80,6 +80,7 @@ export function createInteractionMock(overrides: Record<string, unknown> = {}): 
     },
     options: {
       getSubcommand: vi.fn().mockReturnValue("status"),
+      getSubcommandGroup: vi.fn().mockReturnValue(null),
       getChannel: vi.fn().mockReturnValue({ id: "channel-1" }),
       getBoolean: vi.fn().mockReturnValue(null),
       getString: vi.fn().mockReturnValue(null),

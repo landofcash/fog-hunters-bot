@@ -25,6 +25,16 @@ export class OpenAiProvider implements LlmProvider {
   async generateChat(input: GenerateChatInput): Promise<GenerateChatOutput> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
+    const isGpt56Model = input.model === "gpt-5.6" || input.model.startsWith("gpt-5.6-");
+    const generationOptions = isGpt56Model
+      ? {
+          max_completion_tokens: input.maxTokens,
+          reasoning_effort: "none",
+        }
+      : {
+          max_tokens: input.maxTokens,
+          temperature: 0.7,
+        };
 
     try {
       const response = await fetch(`${this.apiBaseUrl}/chat/completions`, {
@@ -36,8 +46,7 @@ export class OpenAiProvider implements LlmProvider {
         body: JSON.stringify({
           model: input.model,
           messages: input.messages,
-          max_tokens: input.maxTokens,
-          temperature: 0.7,
+          ...generationOptions,
         }),
         signal: controller.signal,
       });

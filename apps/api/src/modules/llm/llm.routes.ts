@@ -6,6 +6,8 @@ import { requireAuth } from "../../middleware/auth";
 import { requireCsrf } from "../../middleware/csrf";
 import { requireGuildScope } from "../../middleware/guild-scope";
 import { requireRole } from "../../middleware/require-role";
+import { getEffectivePrompts } from "./prompts";
+import { sanitizeLlmSettingsForAudit } from "./settings-audit";
 
 const guildParamsSchema = z.object({
   guildId: z.string().min(1),
@@ -31,7 +33,11 @@ export async function registerLlmRoutes(app: FastifyInstance): Promise<void> {
       },
       async (request) => {
         const params = guildParamsSchema.parse(request.params);
-        return llmApp.repository.getOrCreateLlmGuildSettings(params.guildId);
+        const result = await llmApp.repository.getOrCreateLlmGuildSettings(params.guildId);
+        return {
+          ...result,
+          effectivePrompts: getEffectivePrompts(result.settings),
+        };
       },
     );
 
@@ -54,7 +60,8 @@ export async function registerLlmRoutes(app: FastifyInstance): Promise<void> {
           guildDiscordId: params.guildId,
           enabled: body.enabled,
           defaultModel: body.defaultModel,
-          stylePrompt: body.stylePrompt,
+          assistantPrompt: body.assistantPrompt,
+          gatekeeperPrompt: body.gatekeeperPrompt,
           retentionDays: body.retentionDays,
           dmEnabled: body.dmEnabled,
           maxInputChars: body.maxInputChars,
@@ -68,12 +75,13 @@ export async function registerLlmRoutes(app: FastifyInstance): Promise<void> {
           action: "llm.guild_settings.updated",
           entityType: "llm_guild_setting",
           entityId: updated.settings.id,
-          before: before.settings as unknown as Record<string, unknown>,
-          after: updated.settings as unknown as Record<string, unknown>,
+          before: sanitizeLlmSettingsForAudit(before.settings),
+          after: sanitizeLlmSettingsForAudit(updated.settings),
         });
 
         return {
           settings: updated.settings,
+          effectivePrompts: getEffectivePrompts(updated.settings),
           auditLogId: audit.id,
         };
       },

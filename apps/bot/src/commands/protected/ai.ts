@@ -1,10 +1,44 @@
 import { MessageFlags, type ChatInputCommandInteraction } from "discord.js";
 import type { ApiClient } from "../../api/client";
 import { ApiClientError } from "../../runtime/errors";
+import { isSupportedAiModel } from "./ai-models";
 
 interface AccessDeniedDetails {
   reason?: string;
   commandKey?: string;
+}
+
+type PromptType = "assistant" | "gatekeeper";
+
+function parsePromptType(value: string | null): PromptType | null {
+  return value === "assistant" || value === "gatekeeper" ? value : null;
+}
+
+function configuredPrompt(
+  settings: {
+    assistantPrompt?: string | null;
+    gatekeeperPrompt?: string | null;
+  },
+  type: PromptType,
+): string | null {
+  return type === "assistant"
+    ? settings.assistantPrompt ?? null
+    : settings.gatekeeperPrompt ?? null;
+}
+
+function effectivePrompt(
+  prompts: { assistant: string; gatekeeper: string },
+  type: PromptType,
+): string {
+  return type === "assistant" ? prompts.assistant : prompts.gatekeeper;
+}
+
+function promptFilename(type: PromptType): string {
+  return `${type}-prompt.txt`;
+}
+
+function promptLabel(type: PromptType): string {
+  return type === "assistant" ? "Assistant" : "Gatekeeper";
 }
 
 function getAccessDeniedDetails(error: ApiClientError): AccessDeniedDetails | null {
@@ -76,6 +110,41 @@ async function handleEnable(apiClient: ApiClient, interaction: ChatInputCommandI
   });
 }
 
+async function handleModel(apiClient: ApiClient, interaction: ChatInputCommandInteraction): Promise<void> {
+  const guildId = interaction.guildId;
+  if (!guildId) {
+    await interaction.reply({
+      flags: MessageFlags.Ephemeral,
+      content: "`/ai model` can only be used in servers.",
+    });
+    return;
+  }
+
+  const model = interaction.options.getString("name", true);
+  if (!isSupportedAiModel(model)) {
+    await interaction.reply({
+      flags: MessageFlags.Ephemeral,
+      content: "Unsupported AI model selection.",
+    });
+    return;
+  }
+
+  const updated = await apiClient.patchLlmGuildSettings({
+    guildId,
+    actorDiscordUserId: interaction.user.id,
+    channelId: interaction.channelId ?? undefined,
+    commandKey: "ai.model",
+    patch: {
+      defaultModel: model,
+    },
+  });
+
+  await interaction.reply({
+    flags: MessageFlags.Ephemeral,
+    content: `Set this server's AI model to **${updated.settings.defaultModel}**.`,
+  });
+}
+
 async function handleDisable(apiClient: ApiClient, interaction: ChatInputCommandInteraction): Promise<void> {
   const guildId = interaction.guildId;
   const channel = interaction.options.getChannel("channel", true);
@@ -101,40 +170,146 @@ async function handleDisable(apiClient: ApiClient, interaction: ChatInputCommand
   });
 }
 
-async function handleStyle(apiClient: ApiClient, interaction: ChatInputCommandInteraction): Promise<void> {
+async function handlePromptView(apiClient: ApiClient, interaction: ChatInputCommandInteraction): Promise<void> {
   const guildId = interaction.guildId;
   if (!guildId) {
     await interaction.reply({
       flags: MessageFlags.Ephemeral,
-      content: "`/ai style` can only be used in servers.",
+      content: "`/ai prompt view` can only be used in servers.",
     });
     return;
   }
 
-  const mode = interaction.options.getString("mode", true);
-  const promptOverride = interaction.options.getString("prompt");
+  const requestedTypeValue = interaction.options.getString("type");
+  const requestedType = requestedTypeValue ? parsePromptType(requestedTypeValue) : null;
+  if (requestedTypeValue && !requestedType) {
+    await interaction.reply({
+      flags: MessageFlags.Ephemeral,
+      content: "Unsupported prompt type.",
+    });
+    return;
+  }
 
-  const modePromptMap: Record<string, string> = {
-    casual: "Use short, conversational responses with light humor when appropriate.",
-    strict: "Respond with factual, concise answers and avoid speculative language.",
-    custom: promptOverride ?? "",
-  };
-
-  const stylePrompt = mode === "custom" ? promptOverride ?? null : modePromptMap[mode];
-
-  const updated = await apiClient.patchLlmGuildSettings({
+  await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+  const result = await apiClient.readLlmGuildSettings({
     guildId,
     actorDiscordUserId: interaction.user.id,
     channelId: interaction.channelId ?? undefined,
-    commandKey: "ai.style",
-    patch: {
-      stylePrompt,
-    },
+    commandKey: "ai.prompt.view",
+  });
+
+  const types: PromptType[] = requestedType
+    ? [requestedType]
+    : ["assistant", "gatekeeper"];
+  const entries = types.map((type) => ({
+    type,
+    configured: configuredPrompt(result.settings, type) !== null,
+    prompt: effectivePrompt(result.effectivePrompts, type),
+  }));
+  const summary = entries
+    .map((entry) => `${promptLabel(entry.type)}: **${entry.configured ? "custom" : "default"}** (${entry.prompt.length} characters)`)
+    .join("\n");
+  const inlineSections = entries.map((entry) => [
+    `**${promptLabel(entry.type)} prompt**`,
+    "```text",
+    entry.prompt.replaceAll("```", "`\u200b``"),
+    "```",
+  ].join("\n"));
+  const inlineContent = [summary, ...inlineSections].join("\n\n");
+
+  if (entries.every((entry) => entry.prompt.length <= 1_500) && inlineContent.length <= 1_900) {
+    await interaction.editReply({
+      content: inlineContent,
+      allowedMentions: { parse: [] },
+    });
+    return;
+  }
+
+  await interaction.editReply({
+    content: `${summary}\n\nThe effective prompt text is attached.`,
+    files: entries.map((entry) => ({
+      attachment: Buffer.from(entry.prompt, "utf8"),
+      name: promptFilename(entry.type),
+    })),
+    allowedMentions: { parse: [] },
+  });
+}
+
+async function handlePromptSet(apiClient: ApiClient, interaction: ChatInputCommandInteraction): Promise<void> {
+  const guildId = interaction.guildId;
+  if (!guildId) {
+    await interaction.reply({
+      flags: MessageFlags.Ephemeral,
+      content: "`/ai prompt set` can only be used in servers.",
+    });
+    return;
+  }
+
+  const type = parsePromptType(interaction.options.getString("type", true));
+  const prompt = interaction.options.getString("text", true);
+  if (!type) {
+    await interaction.reply({
+      flags: MessageFlags.Ephemeral,
+      content: "Unsupported prompt type.",
+    });
+    return;
+  }
+  if (!prompt.trim() || prompt.length > 6_000) {
+    await interaction.reply({
+      flags: MessageFlags.Ephemeral,
+      content: "Prompt text must contain 1 to 6,000 characters.",
+    });
+    return;
+  }
+
+  await apiClient.patchLlmGuildSettings({
+    guildId,
+    actorDiscordUserId: interaction.user.id,
+    channelId: interaction.channelId ?? undefined,
+    commandKey: "ai.prompt.set",
+    patch: type === "assistant"
+      ? { assistantPrompt: prompt }
+      : { gatekeeperPrompt: prompt },
   });
 
   await interaction.reply({
     flags: MessageFlags.Ephemeral,
-    content: `Updated style prompt. Current model: **${updated.settings.defaultModel}**.`,
+    content: `Set this server's **${type}** prompt (${prompt.length} characters). Existing channel memory was kept.`,
+  });
+}
+
+async function handlePromptReset(apiClient: ApiClient, interaction: ChatInputCommandInteraction): Promise<void> {
+  const guildId = interaction.guildId;
+  if (!guildId) {
+    await interaction.reply({
+      flags: MessageFlags.Ephemeral,
+      content: "`/ai prompt reset` can only be used in servers.",
+    });
+    return;
+  }
+
+  const type = parsePromptType(interaction.options.getString("type", true));
+  if (!type) {
+    await interaction.reply({
+      flags: MessageFlags.Ephemeral,
+      content: "Unsupported prompt type.",
+    });
+    return;
+  }
+
+  await apiClient.patchLlmGuildSettings({
+    guildId,
+    actorDiscordUserId: interaction.user.id,
+    channelId: interaction.channelId ?? undefined,
+    commandKey: "ai.prompt.reset",
+    patch: type === "assistant"
+      ? { assistantPrompt: null }
+      : { gatekeeperPrompt: null },
+  });
+
+  await interaction.reply({
+    flags: MessageFlags.Ephemeral,
+    content: `Reset this server's **${type}** prompt to the default. Existing channel memory was kept.`,
   });
 }
 
@@ -193,20 +368,41 @@ async function handleMemoryClear(apiClient: ApiClient, interaction: ChatInputCom
 
 export async function handleAiCommand(apiClient: ApiClient, interaction: ChatInputCommandInteraction): Promise<void> {
   const sub = interaction.options.getSubcommand(false);
+  const group = interaction.options.getSubcommandGroup(false);
 
   try {
+    if (group === "prompt") {
+      switch (sub) {
+        case "view":
+          await handlePromptView(apiClient, interaction);
+          return;
+        case "set":
+          await handlePromptSet(apiClient, interaction);
+          return;
+        case "reset":
+          await handlePromptReset(apiClient, interaction);
+          return;
+        default:
+          await interaction.reply({
+            flags: MessageFlags.Ephemeral,
+            content: "Unsupported AI prompt command.",
+          });
+          return;
+      }
+    }
+
     switch (sub) {
       case "status":
         await handleStatus(apiClient, interaction);
+        return;
+      case "model":
+        await handleModel(apiClient, interaction);
         return;
       case "enable":
         await handleEnable(apiClient, interaction);
         return;
       case "disable":
         await handleDisable(apiClient, interaction);
-        return;
-      case "style":
-        await handleStyle(apiClient, interaction);
         return;
       case "retention":
         await handleRetention(apiClient, interaction);

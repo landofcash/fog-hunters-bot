@@ -9,6 +9,7 @@ import type {
 } from "../../repositories/types";
 import { createLlmProvider } from "./providers/provider-router";
 import type { LlmChatMessage, LlmProvider } from "./providers/types";
+import { buildGatekeeperPrompt, effectiveAssistantPrompt } from "./prompts";
 
 function estimateTokens(text: string): number {
   return Math.max(1, Math.ceil(text.length / 4));
@@ -21,14 +22,6 @@ function capByChars(text: string, maxChars: number): string {
   return text.slice(0, maxChars);
 }
 
-function buildSystemPrompt(settings?: LlmGuildSettingsRecord): string {
-  const base = "You are a helpful Discord bot assistant. Keep responses concise, clear, and friendly in a casual chat style.";
-  if (!settings?.stylePrompt) {
-    return base;
-  }
-  return `${settings.stylePrompt}`;
-}
-
 export function buildMessages(input: {
   systemPrompt: string;
   summary?: string | null;
@@ -38,26 +31,32 @@ export function buildMessages(input: {
 }): LlmChatMessage[] {
   const messages: LlmChatMessage[] = [{ role: "system", content: input.systemPrompt }];
 
+  const budget = Math.max(1024, input.maxInputChars);
+  const currentContent = capByChars(input.currentContent, budget);
+  let remainingChars = budget - currentContent.length;
+
   if (input.summary) {
-    messages.push({ role: "system", content: `Conversation summary: ${input.summary}` });
+    const summary = capByChars(`Conversation summary: ${input.summary}`, remainingChars);
+    if (summary) {
+      messages.push({ role: "system", content: summary });
+      remainingChars -= summary.length;
+    }
   }
 
-  const budget = Math.max(1024, input.maxInputChars);
-  let usedChars = messages.reduce((sum, item) => sum + item.content.length, 0);
-
-  const tail = input.recentMessages.slice(-20);
+  const selectedHistory: LlmChatMessage[] = [];
+  const tail = input.recentMessages.slice(-20).reverse();
   for (const row of tail) {
     const role = row.role === "ASSISTANT" ? "assistant" : row.role === "SYSTEM" ? "system" : "user";
     const content = row.content;
-    if (usedChars + content.length > budget) {
+    if (content.length > remainingChars) {
       continue;
     }
-    messages.push({ role, content });
-    usedChars += content.length;
+    selectedHistory.push({ role, content });
+    remainingChars -= content.length;
   }
+  messages.push(...selectedHistory.reverse());
 
-  const content = capByChars(input.currentContent, Math.max(1, budget - usedChars));
-  messages.push({ role: "user", content });
+  messages.push({ role: "user", content: currentContent });
   return messages;
 }
 
@@ -165,6 +164,7 @@ export class LlmService {
     botWasMentioned: boolean;
     content: string;
     recentMessages: LlmMessageRecord[];
+    guildSettings?: LlmGuildSettingsRecord;
   }): Promise<LlmDecision> {
     if (input.botWasMentioned) {
       return {
@@ -182,16 +182,7 @@ export class LlmService {
     const decisionMessages: LlmChatMessage[] = [
       {
         role: "system",
-        content: [
-          "You are a Discord response gatekeeper.",
-          "Decide if the assistant should respond to the latest user message.",
-          "Return ONLY JSON with this exact shape:",
-          '{"shouldRespond": boolean, "reason": string, "confidence": number}',
-          "Rules:",
-          "- shouldRespond=true when the message asks for help/info, asks a question, or clearly benefits from bot response.",
-          "- shouldRespond=false for side chatter, acknowledgments, emojis, or conversation where bot input is unnecessary.",
-          "- confidence must be between 0 and 1.",
-        ].join("\n"),
+        content: buildGatekeeperPrompt(input.guildSettings),
       },
       {
         role: "user",
@@ -298,6 +289,7 @@ export class LlmService {
       botWasMentioned: input.botWasMentioned,
       content,
       recentMessages,
+      guildSettings,
     });
 
     if (!decision.shouldRespond) {
@@ -324,7 +316,7 @@ export class LlmService {
     );
 
     const promptMessages = buildMessages({
-      systemPrompt: buildSystemPrompt(guildSettings),
+      systemPrompt: effectiveAssistantPrompt(guildSettings),
       summary: conversation.summaryText,
       recentMessages: generationContext.filter((message) => message.id !== currentMessage.id),
       currentContent: content,

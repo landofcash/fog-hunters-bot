@@ -159,4 +159,90 @@ describe("internal bot integration routes", () => {
     expect(enabled.statusCode).toBe(200);
     expect(enabled.json().channel.enabled).toBe(true);
   });
+
+  it("accepts the legacy style prompt alias during rollout", async () => {
+    const { app, repo } = await createTestApp();
+    closeApp = () => app.close();
+
+    await app.inject({
+      method: "POST",
+      url: "/api/v1/internal/guilds/guild-legacy-style/bootstrap",
+      headers: { "x-internal-key": "test_internal_api_key" },
+      payload: {
+        guildName: "Legacy Style Guild",
+        owner: {
+          discordUserId: "discord_legacy_owner",
+          username: "legacy_owner",
+        },
+      },
+    });
+    const guild = await repo.getGuildByDiscordId("guild-legacy-style");
+    expect(guild).not.toBeNull();
+    repo.commandPermissions.set(`${guild!.id}:ai.style`, {
+      id: "legacy-style-policy",
+      guildId: guild!.id,
+      commandKey: "ai.style",
+      minRole: "ADMIN",
+      allowChannels: [],
+      denyChannels: [],
+      updatedAt: new Date(),
+    });
+
+    const updated = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/internal/guilds/guild-legacy-style/llm/settings",
+      headers: { "x-internal-key": "test_internal_api_key" },
+      payload: {
+        actorDiscordUserId: "discord_legacy_owner",
+        commandKey: "ai.style",
+        stylePrompt: "Legacy assistant prompt",
+      },
+    });
+
+    expect(updated.statusCode).toBe(200);
+    expect(updated.json().settings.assistantPrompt).toBe("Legacy assistant prompt");
+    expect(updated.json().settings).not.toHaveProperty("stylePrompt");
+  });
+
+  it("retires ai.style and bootstraps the new prompt policies", async () => {
+    const { app, repo } = await createTestApp();
+    closeApp = () => app.close();
+    const headers = { "x-internal-key": "test_internal_api_key" };
+    const url = "/api/v1/internal/guilds/guild-policy-reconcile/bootstrap";
+
+    await app.inject({
+      method: "POST",
+      url,
+      headers,
+      payload: { guildName: "Policy Guild" },
+    });
+    const guild = await repo.getGuildByDiscordId("guild-policy-reconcile");
+    expect(guild).not.toBeNull();
+    repo.commandPermissions.set(`${guild!.id}:ai.style`, {
+      id: "retired-policy",
+      guildId: guild!.id,
+      commandKey: "ai.style",
+      minRole: "ADMIN",
+      allowChannels: [],
+      denyChannels: [],
+      updatedAt: new Date(),
+    });
+
+    await app.inject({
+      method: "POST",
+      url,
+      headers,
+      payload: { guildName: "Policy Guild" },
+    });
+
+    const commandKeys = Array.from(repo.commandPermissions.values())
+      .filter((policy) => policy.guildId === guild!.id)
+      .map((policy) => policy.commandKey);
+    expect(commandKeys).not.toContain("ai.style");
+    expect(commandKeys).toEqual(expect.arrayContaining([
+      "ai.prompt.view",
+      "ai.prompt.set",
+      "ai.prompt.reset",
+    ]));
+  });
 });

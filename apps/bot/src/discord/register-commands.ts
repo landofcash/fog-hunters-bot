@@ -1,5 +1,6 @@
 import { REST, Routes, SlashCommandBuilder } from "discord.js";
 import type { Logger } from "pino";
+import { AI_MODEL_CHOICES } from "../commands/protected/ai-models";
 
 export const commandDefinitions = [
   new SlashCommandBuilder().setName("ping").setDescription("Check bot latency and availability."),
@@ -13,6 +14,18 @@ export const commandDefinitions = [
     .setDescription("AI chat administration commands")
     .addSubcommand((sub) =>
       sub.setName("status").setDescription("View AI settings for this server"),
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName("model")
+        .setDescription("Set the AI model for this server")
+        .addStringOption((option) =>
+          option
+            .setName("name")
+            .setDescription("AI model")
+            .setRequired(true)
+            .addChoices(...AI_MODEL_CHOICES),
+        ),
     )
     .addSubcommand((sub) =>
       sub
@@ -41,25 +54,60 @@ export const commandDefinitions = [
             .setRequired(true),
         ),
     )
-    .addSubcommand((sub) =>
-      sub
-        .setName("style")
-        .setDescription("Set AI response style")
-        .addStringOption((option) =>
-          option
-            .setName("mode")
-            .setDescription("Style mode")
-            .setRequired(true)
-            .addChoices(
-              { name: "casual", value: "casual" },
-              { name: "strict", value: "strict" },
-              { name: "custom", value: "custom" },
+    .addSubcommandGroup((group) =>
+      group
+        .setName("prompt")
+        .setDescription("Manage this server's AI prompts")
+        .addSubcommand((sub) =>
+          sub
+            .setName("view")
+            .setDescription("View effective prompts")
+            .addStringOption((option) =>
+              option
+                .setName("type")
+                .setDescription("Prompt type; omit to view both")
+                .addChoices(
+                  { name: "assistant", value: "assistant" },
+                  { name: "gatekeeper", value: "gatekeeper" },
+                ),
             ),
         )
-        .addStringOption((option) =>
-          option
-            .setName("prompt")
-            .setDescription("Custom style prompt (required for custom mode)"),
+        .addSubcommand((sub) =>
+          sub
+            .setName("set")
+            .setDescription("Set a prompt override")
+            .addStringOption((option) =>
+              option
+                .setName("type")
+                .setDescription("Prompt type")
+                .setRequired(true)
+                .addChoices(
+                  { name: "assistant", value: "assistant" },
+                  { name: "gatekeeper", value: "gatekeeper" },
+                ),
+            )
+            .addStringOption((option) =>
+              option
+                .setName("text")
+                .setDescription("Prompt text (maximum 6,000 characters)")
+                .setRequired(true)
+                .setMaxLength(6_000),
+            ),
+        )
+        .addSubcommand((sub) =>
+          sub
+            .setName("reset")
+            .setDescription("Reset a prompt to its default")
+            .addStringOption((option) =>
+              option
+                .setName("type")
+                .setDescription("Prompt type")
+                .setRequired(true)
+                .addChoices(
+                  { name: "assistant", value: "assistant" },
+                  { name: "gatekeeper", value: "gatekeeper" },
+                ),
+            ),
         ),
     )
     .addSubcommand((sub) =>
