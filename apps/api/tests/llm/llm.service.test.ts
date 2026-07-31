@@ -1,7 +1,11 @@
 import type { FastifyBaseLogger } from "fastify";
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../src/lib/errors";
-import { LlmService } from "../../src/modules/llm/llm.service";
+import { buildMessages, LlmService } from "../../src/modules/llm/llm.service";
+import {
+  DEFAULT_ASSISTANT_PROMPT,
+  IMMUTABLE_GATEKEEPER_CONTRACT,
+} from "../../src/modules/llm/prompts";
 import type { LlmProvider } from "../../src/modules/llm/providers/types";
 import { createTestApp } from "../helpers/test-app";
 
@@ -68,6 +72,130 @@ describe("LlmService", () => {
       const generationCall = generateChat.mock.calls[1]?.[0];
       expect(generationCall).toBeDefined();
       expect(generationCall?.messages.filter((message) => message.content === "What is the answer?")).toHaveLength(1);
+      expect(generationCall?.messages[0]).toEqual({ role: "system", content: DEFAULT_ASSISTANT_PROMPT });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("keeps large system prompts outside the conversation budget and preserves current input", () => {
+    const systemPrompt = "s".repeat(32_000);
+    const currentContent = "current question";
+    const messages = buildMessages({
+      systemPrompt,
+      summary: "Earlier context",
+      recentMessages: Array.from({ length: 20 }, (_, index) => ({
+        id: `message-${index}`,
+        conversationId: "conversation",
+        role: "USER" as const,
+        content: "h".repeat(200),
+        createdAt: new Date(),
+      })),
+      currentContent,
+      maxInputChars: 1_024,
+    });
+
+    expect(messages[0]).toEqual({ role: "system", content: systemPrompt });
+    expect(messages.at(-1)).toEqual({ role: "user", content: currentContent });
+    expect(messages.slice(1).reduce((sum, message) => sum + message.content.length, 0)).toBeLessThanOrEqual(1_024);
+  });
+
+  it("uses isolated assistant and gatekeeper prompts for each guild", async () => {
+    const { app, repo, config, guild: guildA } = await createLlmFixture();
+    try {
+      repo.llmGuildSettings.set(guildA.id, {
+        ...(repo.llmGuildSettings.get(guildA.id)!),
+        assistantPrompt: "Assistant prompt A",
+        gatekeeperPrompt: "Gatekeeper rules A",
+      });
+
+      const guildB = repo.seedGuild("guild-llm-b", "LLM Guild B");
+      repo.llmGuildSettings.set(guildB.id, {
+        id: "llm-settings-b",
+        guildId: guildB.id,
+        enabled: true,
+        defaultModel: "test-model",
+        assistantPrompt: "Assistant prompt B",
+        gatekeeperPrompt: "Gatekeeper rules B",
+        retentionDays: 90,
+        dmEnabled: true,
+        maxInputChars: 4_000,
+        maxOutputTokens: 256,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      repo.llmChannelSettings.set(`${guildB.id}:channel-1`, {
+        id: "llm-channel-b",
+        guildId: guildB.id,
+        discordChannelId: "channel-1",
+        enabled: true,
+        respondOnMentionOnly: false,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      const generateChat = vi
+        .fn<LlmProvider["generateChat"]>()
+        .mockResolvedValueOnce({
+          text: JSON.stringify({ shouldRespond: true, reason: "QUESTION", confidence: 1 }),
+          usage: { inputTokens: 1, outputTokens: 1 },
+        })
+        .mockResolvedValueOnce({
+          text: "Answer A",
+          usage: { inputTokens: 1, outputTokens: 1 },
+        })
+        .mockResolvedValueOnce({
+          text: JSON.stringify({ shouldRespond: true, reason: "QUESTION", confidence: 1 }),
+          usage: { inputTokens: 1, outputTokens: 1 },
+        })
+        .mockResolvedValueOnce({
+          text: "Answer B",
+          usage: { inputTokens: 1, outputTokens: 1 },
+        });
+      const service = new LlmService(config, repo, app.log, { generateChat });
+
+      await service.respondToMessage(messageInput());
+      await service.respondToMessage(messageInput({ guildId: "guild-llm-b" }));
+
+      const gatekeeperA = generateChat.mock.calls[0]?.[0].messages[0]?.content ?? "";
+      const assistantA = generateChat.mock.calls[1]?.[0].messages[0]?.content ?? "";
+      const gatekeeperB = generateChat.mock.calls[2]?.[0].messages[0]?.content ?? "";
+      const assistantB = generateChat.mock.calls[3]?.[0].messages[0]?.content ?? "";
+
+      expect(gatekeeperA).toContain("Gatekeeper rules A");
+      expect(gatekeeperA).toContain(IMMUTABLE_GATEKEEPER_CONTRACT);
+      expect(gatekeeperA).not.toContain("Gatekeeper rules B");
+      expect(assistantA).toBe("Assistant prompt A");
+      expect(gatekeeperB).toContain("Gatekeeper rules B");
+      expect(gatekeeperB).not.toContain("Gatekeeper rules A");
+      expect(assistantB).toBe("Assistant prompt B");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("keeps direct messages on global defaults", async () => {
+    const { app, repo, config } = await createLlmFixture();
+    try {
+      const generateChat = vi.fn<LlmProvider["generateChat"]>().mockResolvedValue({
+        text: "DM response",
+        usage: { inputTokens: 1, outputTokens: 1 },
+      });
+      const service = new LlmService(config, repo, app.log, { generateChat });
+
+      await service.respondToMessage(messageInput({
+        guildId: undefined,
+        channelId: undefined,
+        isDm: true,
+        botWasMentioned: true,
+      }));
+
+      expect(generateChat).toHaveBeenCalledTimes(1);
+      expect(generateChat.mock.calls[0]?.[0]).toMatchObject({ model: config.llmDefaultModel });
+      expect(generateChat.mock.calls[0]?.[0].messages[0]).toEqual({
+        role: "system",
+        content: DEFAULT_ASSISTANT_PROMPT,
+      });
     } finally {
       await app.close();
     }

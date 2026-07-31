@@ -78,18 +78,144 @@ describe("protected command handlers", () => {
     expect(interaction.reply).toHaveBeenCalled();
   });
 
-  it("maps style and retention settings", async () => {
+  it("maps retention settings", async () => {
     const patch = vi.fn().mockResolvedValue({ settings: { defaultModel: "model" } });
     const apiClient = createApiClientMock({ patchLlmGuildSettings: patch });
-    const style = aiInteraction("style", {
-      getString: vi.fn((name: string) => name === "mode" ? "strict" : null),
-    });
-    await handleAiCommand(apiClient, style);
-    expect(patch).toHaveBeenCalledWith(expect.objectContaining({ commandKey: "ai.style", patch: { stylePrompt: expect.stringContaining("factual") } }));
-
     const retention = aiInteraction("retention", { getInteger: vi.fn().mockReturnValue(45) });
     await handleAiCommand(apiClient, retention);
     expect(patch).toHaveBeenCalledWith(expect.objectContaining({ commandKey: "ai.retention", patch: { retentionDays: 45 } }));
+  });
+
+  it.each([
+    ["assistant", { assistantPrompt: "Custom assistant" }],
+    ["gatekeeper", { gatekeeperPrompt: "Custom gatekeeper" }],
+  ] as const)("sets the %s prompt without clearing memory", async (type, expectedPatch) => {
+    const patch = vi.fn().mockResolvedValue({
+      settings: {
+        assistantPrompt: type === "assistant" ? "Custom assistant" : null,
+        gatekeeperPrompt: type === "gatekeeper" ? "Custom gatekeeper" : null,
+      },
+    });
+    const apiClient = createApiClientMock({ patchLlmGuildSettings: patch });
+    const interaction = aiInteraction("set", {
+      getSubcommandGroup: vi.fn().mockReturnValue("prompt"),
+      getString: vi.fn((name: string) => name === "type" ? type : `Custom ${type}`),
+    });
+
+    await handleAiCommand(apiClient, interaction);
+
+    expect(patch).toHaveBeenCalledWith(expect.objectContaining({
+      commandKey: "ai.prompt.set",
+      patch: expectedPatch,
+    }));
+    expect(apiClient.clearLlmChannelMemory).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringContaining("Existing channel memory was kept"),
+    }));
+  });
+
+  it.each(["assistant", "gatekeeper"] as const)("resets the %s prompt", async (type) => {
+    const patch = vi.fn().mockResolvedValue({ settings: {} });
+    const apiClient = createApiClientMock({ patchLlmGuildSettings: patch });
+    const interaction = aiInteraction("reset", {
+      getSubcommandGroup: vi.fn().mockReturnValue("prompt"),
+      getString: vi.fn((name: string) => name === "type" ? type : null),
+    });
+
+    await handleAiCommand(apiClient, interaction);
+
+    expect(patch).toHaveBeenCalledWith(expect.objectContaining({
+      commandKey: "ai.prompt.reset",
+      patch: type === "assistant" ? { assistantPrompt: null } : { gatekeeperPrompt: null },
+    }));
+  });
+
+  it("views short effective prompts inline and attaches long prompts", async () => {
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce({
+        guild: { name: "Guild" },
+        settings: { assistantPrompt: null, gatekeeperPrompt: "Custom rules" },
+        effectivePrompts: { assistant: "Default assistant", gatekeeper: "Fixed contract\nCustom rules" },
+      })
+      .mockResolvedValueOnce({
+        guild: { name: "Guild" },
+        settings: { assistantPrompt: "x".repeat(2_000), gatekeeperPrompt: null },
+        effectivePrompts: { assistant: "x".repeat(2_000), gatekeeper: "Default gatekeeper" },
+      });
+    const apiClient = createApiClientMock({ readLlmGuildSettings: read });
+
+    const short = aiInteraction("view", {
+      getSubcommandGroup: vi.fn().mockReturnValue("prompt"),
+      getString: vi.fn().mockReturnValue("gatekeeper"),
+    });
+    await handleAiCommand(apiClient, short);
+    expect(short.editReply).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringContaining("Fixed contract"),
+    }));
+
+    const long = aiInteraction("view", {
+      getSubcommandGroup: vi.fn().mockReturnValue("prompt"),
+      getString: vi.fn().mockReturnValue("assistant"),
+    });
+    await handleAiCommand(apiClient, long);
+    expect(long.editReply).toHaveBeenCalledWith(expect.objectContaining({
+      files: [expect.objectContaining({ name: "assistant-prompt.txt" })],
+    }));
+  });
+
+  it("rejects blank or oversized Discord prompt text", async () => {
+    for (const prompt of ["   ", "x".repeat(6_001)]) {
+      const patch = vi.fn();
+      const apiClient = createApiClientMock({ patchLlmGuildSettings: patch });
+      const interaction = aiInteraction("set", {
+        getSubcommandGroup: vi.fn().mockReturnValue("prompt"),
+        getString: vi.fn((name: string) => name === "type" ? "assistant" : prompt),
+      });
+
+      await handleAiCommand(apiClient, interaction);
+
+      expect(patch).not.toHaveBeenCalled();
+      expect(interaction.reply).toHaveBeenCalledWith(expect.objectContaining({
+        content: expect.stringContaining("1 to 6,000"),
+      }));
+    }
+  });
+
+  it("updates the selected AI model", async () => {
+    const patch = vi.fn().mockResolvedValue({ settings: { defaultModel: "gpt-5.6-terra" } });
+    const apiClient = createApiClientMock({ patchLlmGuildSettings: patch });
+    const interaction = aiInteraction("model", {
+      getString: vi.fn((name: string) => name === "name" ? "gpt-5.6-terra" : null),
+    });
+
+    await handleAiCommand(apiClient, interaction);
+
+    expect(patch).toHaveBeenCalledWith({
+      guildId: "guild-1",
+      actorDiscordUserId: "user-1",
+      channelId: "channel-1",
+      commandKey: "ai.model",
+      patch: { defaultModel: "gpt-5.6-terra" },
+    });
+    expect(interaction.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: "Set this server's AI model to **gpt-5.6-terra**.",
+    }));
+  });
+
+  it("rejects AI models outside the Discord choice list", async () => {
+    const patch = vi.fn();
+    const apiClient = createApiClientMock({ patchLlmGuildSettings: patch });
+    const interaction = aiInteraction("model", {
+      getString: vi.fn((name: string) => name === "name" ? "unknown-model" : null),
+    });
+
+    await handleAiCommand(apiClient, interaction);
+
+    expect(patch).not.toHaveBeenCalled();
+    expect(interaction.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: "Unsupported AI model selection.",
+    }));
   });
 
   it("renders permission details and generic failures", async () => {

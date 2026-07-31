@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { llmPromptOverrideSchema } from "./llm";
 
 export const internalBootstrapBodySchema = z.object({
   guildName: z.string().min(1),
@@ -44,10 +45,12 @@ export const internalLlmSettingsReadBodySchema = z.object({
 export const internalLlmSettingsPatchBodySchema = z.object({
   actorDiscordUserId: z.string().min(1),
   channelId: z.string().optional(),
-  commandKey: z.string().min(1).default("ai.style"),
+  commandKey: z.string().min(1).default("ai.prompt.set"),
   enabled: z.boolean().optional(),
   defaultModel: z.string().min(1).optional(),
-  stylePrompt: z.string().max(2000).nullable().optional(),
+  assistantPrompt: llmPromptOverrideSchema.optional(),
+  gatekeeperPrompt: llmPromptOverrideSchema.optional(),
+  stylePrompt: llmPromptOverrideSchema.optional(),
   retentionDays: z.number().int().min(1).max(3650).optional(),
   dmEnabled: z.boolean().optional(),
   maxInputChars: z.number().int().min(128).max(32000).optional(),

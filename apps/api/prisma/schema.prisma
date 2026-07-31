@@ -249,7 +249,8 @@ model LlmGuildSetting {
   guildId          String   @unique(map: "ux_llm_guild_settings_guild_id") @map("guild_id") @db.Uuid
   enabled          Boolean  @default(false)
   defaultModel     String   @default("gpt-4.1-mini") @map("default_model")
-  stylePrompt      String?  @map("style_prompt")
+  assistantPrompt  String?  @map("assistant_prompt")
+  gatekeeperPrompt String?  @map("gatekeeper_prompt")
   retentionDays    Int      @default(90) @map("retention_days")
   dmEnabled        Boolean  @default(true) @map("dm_enabled")
   maxInputChars    Int      @default(4000) @map("max_input_chars")

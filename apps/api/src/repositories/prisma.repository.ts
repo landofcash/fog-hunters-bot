@@ -37,7 +37,11 @@ import type {
 } from "./types";
 import { TenantRepositoryBase } from "./tenant-repository";
 import { Prisma, type PrismaClient } from "@prisma/client";
-import { DEFAULT_COMMAND_POLICIES, DEFAULT_FEATURE_FLAGS } from "../lib/defaults";
+import {
+  DEFAULT_COMMAND_POLICIES,
+  DEFAULT_FEATURE_FLAGS,
+  RETIRED_COMMAND_POLICY_KEYS,
+} from "../lib/defaults";
 
 function encodeOffsetCursor(offset: number): string {
   return Buffer.from(String(offset), "utf8").toString("base64url");
@@ -72,7 +76,8 @@ function mapLlmGuildSettings(record: {
   guildId: string;
   enabled: boolean;
   defaultModel: string;
-  stylePrompt?: string | null;
+  assistantPrompt?: string | null;
+  gatekeeperPrompt?: string | null;
   retentionDays: number;
   dmEnabled: boolean;
   maxInputChars: number;
@@ -85,7 +90,8 @@ function mapLlmGuildSettings(record: {
     guildId: record.guildId,
     enabled: record.enabled,
     defaultModel: record.defaultModel,
-    stylePrompt: record.stylePrompt ?? null,
+    assistantPrompt: record.assistantPrompt ?? null,
+    gatekeeperPrompt: record.gatekeeperPrompt ?? null,
     retentionDays: record.retentionDays,
     dmEnabled: record.dmEnabled,
     maxInputChars: record.maxInputChars,
@@ -265,6 +271,13 @@ export class PrismaAppRepository extends TenantRepositoryBase implements AppRepo
           update: {},
         });
       }
+
+      await tx.commandPermission.deleteMany({
+        where: {
+          guildId: guild.id,
+          commandKey: { in: RETIRED_COMMAND_POLICY_KEYS },
+        },
+      });
 
       let ownerMembershipCreated = false;
       if (input.ownerProfile) {
@@ -1081,7 +1094,8 @@ export class PrismaAppRepository extends TenantRepositoryBase implements AppRepo
     guildDiscordId: string;
     enabled?: boolean;
     defaultModel?: string;
-    stylePrompt?: string | null;
+    assistantPrompt?: string | null;
+    gatekeeperPrompt?: string | null;
     retentionDays?: number;
     dmEnabled?: boolean;
     maxInputChars?: number;
@@ -1093,7 +1107,8 @@ export class PrismaAppRepository extends TenantRepositoryBase implements AppRepo
       data: {
         enabled: input.enabled,
         defaultModel: input.defaultModel,
-        stylePrompt: input.stylePrompt === undefined ? undefined : input.stylePrompt,
+        assistantPrompt: input.assistantPrompt === undefined ? undefined : input.assistantPrompt,
+        gatekeeperPrompt: input.gatekeeperPrompt === undefined ? undefined : input.gatekeeperPrompt,
         retentionDays: input.retentionDays,
         dmEnabled: input.dmEnabled,
         maxInputChars: input.maxInputChars,

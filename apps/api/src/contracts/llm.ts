@@ -1,10 +1,17 @@
 import { z } from "zod";
 
+export const llmPromptOverrideSchema = z
+  .string()
+  .max(32_000)
+  .refine((value) => value.trim().length > 0, "Prompt cannot be blank.")
+  .nullable();
+
 export const llmGuildSettingsPatchBodySchema = z
   .object({
     enabled: z.boolean().optional(),
     defaultModel: z.string().min(1).optional(),
-    stylePrompt: z.string().max(2000).nullable().optional(),
+    assistantPrompt: llmPromptOverrideSchema.optional(),
+    gatekeeperPrompt: llmPromptOverrideSchema.optional(),
     retentionDays: z.coerce.number().int().min(1).max(3650).optional(),
     dmEnabled: z.boolean().optional(),
     maxInputChars: z.coerce.number().int().min(128).max(32000).optional(),

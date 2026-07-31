@@ -34,7 +34,11 @@ import type {
 } from "../../src/lib/domain";
 import { generateId } from "../../src/lib/ids";
 import { ApiError } from "../../src/lib/errors";
-import { DEFAULT_COMMAND_POLICIES, DEFAULT_FEATURE_FLAGS } from "../../src/lib/defaults";
+import {
+  DEFAULT_COMMAND_POLICIES,
+  DEFAULT_FEATURE_FLAGS,
+  RETIRED_COMMAND_POLICY_KEYS,
+} from "../../src/lib/defaults";
 
 function paginate<T>(items: T[], limit: number, cursor?: string): CursorPage<T> {
   const offset = cursor ? Number(Buffer.from(cursor, "base64url").toString("utf8")) : 0;
@@ -183,6 +187,10 @@ export class InMemoryRepository implements AppRepository {
           updatedAt: new Date(),
         });
       }
+    }
+
+    for (const commandKey of RETIRED_COMMAND_POLICY_KEYS) {
+      this.commandPermissions.delete(this.commandKey(guild.id, commandKey));
     }
 
     let ownerMembershipCreated = false;
@@ -574,7 +582,8 @@ export class InMemoryRepository implements AppRepository {
       guildId: guild.id,
       enabled: false,
       defaultModel: "gpt-4.1-mini",
-      stylePrompt: null,
+      assistantPrompt: null,
+      gatekeeperPrompt: null,
       retentionDays: 90,
       dmEnabled: true,
       maxInputChars: 4000,
@@ -590,7 +599,8 @@ export class InMemoryRepository implements AppRepository {
     guildDiscordId: string;
     enabled?: boolean;
     defaultModel?: string;
-    stylePrompt?: string | null;
+    assistantPrompt?: string | null;
+    gatekeeperPrompt?: string | null;
     retentionDays?: number;
     dmEnabled?: boolean;
     maxInputChars?: number;
@@ -601,7 +611,8 @@ export class InMemoryRepository implements AppRepository {
       ...settings,
       enabled: input.enabled ?? settings.enabled,
       defaultModel: input.defaultModel ?? settings.defaultModel,
-      stylePrompt: input.stylePrompt === undefined ? settings.stylePrompt : input.stylePrompt,
+      assistantPrompt: input.assistantPrompt === undefined ? settings.assistantPrompt : input.assistantPrompt,
+      gatekeeperPrompt: input.gatekeeperPrompt === undefined ? settings.gatekeeperPrompt : input.gatekeeperPrompt,
       retentionDays: input.retentionDays ?? settings.retentionDays,
       dmEnabled: input.dmEnabled ?? settings.dmEnabled,
       maxInputChars: input.maxInputChars ?? settings.maxInputChars,

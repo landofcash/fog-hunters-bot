@@ -45,6 +45,12 @@ export const DEFAULT_COMMAND_POLICIES: DefaultCommandPolicy[] = [
     denyChannels: [],
   },
   {
+    commandKey: "ai.model",
+    minRole: "ADMIN",
+    allowChannels: [],
+    denyChannels: [],
+  },
+  {
     commandKey: "ai.enable",
     minRole: "ADMIN",
     allowChannels: [],
@@ -57,7 +63,19 @@ export const DEFAULT_COMMAND_POLICIES: DefaultCommandPolicy[] = [
     denyChannels: [],
   },
   {
-    commandKey: "ai.style",
+    commandKey: "ai.prompt.view",
+    minRole: "ADMIN",
+    allowChannels: [],
+    denyChannels: [],
+  },
+  {
+    commandKey: "ai.prompt.set",
+    minRole: "ADMIN",
+    allowChannels: [],
+    denyChannels: [],
+  },
+  {
+    commandKey: "ai.prompt.reset",
     minRole: "ADMIN",
     allowChannels: [],
     denyChannels: [],
@@ -75,3 +93,5 @@ export const DEFAULT_COMMAND_POLICIES: DefaultCommandPolicy[] = [
     denyChannels: [],
   },
 ];
+
+export const RETIRED_COMMAND_POLICY_KEYS = ["ai.style"] as const;

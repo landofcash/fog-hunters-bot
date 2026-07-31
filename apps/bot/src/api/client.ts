@@ -145,7 +145,8 @@ export class ApiClient {
     patch: {
       enabled?: boolean;
       defaultModel?: string;
-      stylePrompt?: string | null;
+      assistantPrompt?: string | null;
+      gatekeeperPrompt?: string | null;
       retentionDays?: number;
       dmEnabled?: boolean;
       maxInputChars?: number;
@@ -157,7 +158,7 @@ export class ApiClient {
       body: JSON.stringify({
         actorDiscordUserId: input.actorDiscordUserId,
         channelId: input.channelId,
-        commandKey: input.commandKey ?? "ai.style",
+        commandKey: input.commandKey ?? "ai.prompt.set",
         ...input.patch,
       }),
     });
