@@ -90,6 +90,86 @@ describe("internal bot integration routes", () => {
     expect(denied.json().error.code).toBe("COMMAND_ACCESS_DENIED");
   });
 
+  it("lets a platform administrator manage admins in any guild through Discord commands", async () => {
+    const { app, repo, config } = await createTestApp();
+    closeApp = () => app.close();
+    const headers = { "x-internal-key": "test_internal_api_key" };
+    const guildId = "guild-platform-discord-admin";
+    const platformDiscordUserId = "discord_platform_command_admin";
+    const targetDiscordUserId = "discord_platform_managed_admin";
+    config.platformAdminDiscordIds.add(platformDiscordUserId);
+
+    await app.inject({
+      method: "POST",
+      url: `/api/v1/internal/guilds/${guildId}/bootstrap`,
+      headers,
+      payload: {
+        guildName: "Platform Command Guild",
+        owner: {
+          discordUserId: "discord_other_guild_owner",
+          username: "other_guild_owner",
+        },
+      },
+    });
+
+    await app.inject({
+      method: "POST",
+      url: "/api/v1/internal/interactions/user-touch",
+      headers,
+      payload: {
+        discordUserId: platformDiscordUserId,
+        username: "platform_command_admin",
+      },
+    });
+
+    const added = await app.inject({
+      method: "POST",
+      url: `/api/v1/internal/guilds/${guildId}/admins/add`,
+      headers,
+      payload: {
+        actorDiscordUserId: platformDiscordUserId,
+        channelId: "platform-admin-channel",
+        target: {
+          discordUserId: targetDiscordUserId,
+          username: "platform_managed_admin",
+        },
+      },
+    });
+
+    expect(added.statusCode).toBe(200);
+    expect(added.json()).toMatchObject({
+      changed: true,
+      membership: { tenantRole: "ADMIN", status: "ACTIVE" },
+    });
+    expect(repo.auditLogs.at(-1)).toMatchObject({
+      actorType: "PLATFORM_ADMIN",
+      action: "member.admin.added",
+    });
+
+    const removed = await app.inject({
+      method: "POST",
+      url: `/api/v1/internal/guilds/${guildId}/admins/remove`,
+      headers,
+      payload: {
+        actorDiscordUserId: platformDiscordUserId,
+        target: {
+          discordUserId: targetDiscordUserId,
+          username: "platform_managed_admin",
+        },
+      },
+    });
+
+    expect(removed.statusCode).toBe(200);
+    expect(removed.json()).toMatchObject({
+      changed: true,
+      membership: { tenantRole: "USER" },
+    });
+    expect(repo.auditLogs.at(-1)).toMatchObject({
+      actorType: "PLATFORM_ADMIN",
+      action: "member.admin.removed",
+    });
+  });
+
   it("lets the owner manage admins while admins can only list them", async () => {
     const { app, repo } = await createTestApp();
     closeApp = () => app.close();

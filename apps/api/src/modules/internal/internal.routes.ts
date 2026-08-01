@@ -40,7 +40,11 @@ async function assertCommandAccess(input: {
   commandKey: string;
   channelId?: string;
   defaultMinRole?: "OWNER" | "ADMIN" | "MODERATOR" | "USER";
-}): Promise<{ actorUserId?: string; actorRole?: "OWNER" | "ADMIN" | "MODERATOR" | "USER" }> {
+}): Promise<{
+  actorUserId?: string;
+  actorRole?: "OWNER" | "ADMIN" | "MODERATOR" | "USER";
+  actorType: "USER" | "PLATFORM_ADMIN";
+}> {
   const access = await input.app.repository.checkCommandAccess({
     guildDiscordId: input.guildId,
     commandKey: input.commandKey,
@@ -59,6 +63,7 @@ async function assertCommandAccess(input: {
   return {
     actorUserId: access.actor?.userId,
     actorRole: access.actor?.tenantRole,
+    actorType: access.actor?.platformRole === "PLATFORM_ADMIN" ? "PLATFORM_ADMIN" : "USER",
   };
 }
 
@@ -237,7 +242,7 @@ export async function registerInternalRoutes(app: FastifyInstance): Promise<void
       const audit = await internalApp.repository.createAuditLog({
         guildId: update.guild.id,
         actorUserId: access.actorUserId,
-        actorType: "USER",
+        actorType: access.actorType,
         action: "member.admin.added",
         entityType: "guild_member",
         entityId: `${update.after.guildId}:${update.after.userId}`,
@@ -302,7 +307,7 @@ export async function registerInternalRoutes(app: FastifyInstance): Promise<void
       const audit = await internalApp.repository.createAuditLog({
         guildId: update.guild.id,
         actorUserId: access.actorUserId,
-        actorType: "USER",
+        actorType: access.actorType,
         action: "member.admin.removed",
         entityType: "guild_member",
         entityId: `${update.after.guildId}:${update.after.userId}`,
@@ -388,7 +393,7 @@ export async function registerInternalRoutes(app: FastifyInstance): Promise<void
       await internalApp.repository.createAuditLog({
         guildId: updated.guild.id,
         actorUserId: access.actorUserId,
-        actorType: "USER",
+        actorType: access.actorType,
         action: "llm.guild_settings.updated",
         entityType: "llm_guild_setting",
         entityId: updated.settings.id,
@@ -434,7 +439,7 @@ export async function registerInternalRoutes(app: FastifyInstance): Promise<void
       await internalApp.repository.createAuditLog({
         guildId: guild.id,
         actorUserId: access.actorUserId,
-        actorType: "USER",
+        actorType: access.actorType,
         action: "llm.channel_settings.upserted",
         entityType: "llm_channel_setting",
         entityId: current.id,
@@ -478,7 +483,7 @@ export async function registerInternalRoutes(app: FastifyInstance): Promise<void
       await internalApp.repository.createAuditLog({
         guildId: guild.id,
         actorUserId: access.actorUserId,
-        actorType: "USER",
+        actorType: access.actorType,
         action: "llm.channel_settings.disabled",
         entityType: "llm_channel_setting",
         entityId: current.id,
@@ -515,7 +520,7 @@ export async function registerInternalRoutes(app: FastifyInstance): Promise<void
       await internalApp.repository.createAuditLog({
         guildId: guild.id,
         actorUserId: access.actorUserId,
-        actorType: "USER",
+        actorType: access.actorType,
         action: "llm.channel_memory.cleared",
         entityType: "llm_conversation",
         entityId: `${params.guildId}:${body.channelId}`,

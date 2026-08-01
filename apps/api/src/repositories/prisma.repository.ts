@@ -571,6 +571,19 @@ export class PrismaAppRepository extends TenantRepositoryBase implements AppRepo
       };
     }
 
+    if (actorUser.platformRole === "PLATFORM_ADMIN") {
+      return {
+        guild,
+        policy,
+        actor: {
+          userId: actorUser.id,
+          tenantRole: "OWNER",
+          platformRole: "PLATFORM_ADMIN",
+        },
+        allowed: true,
+      };
+    }
+
     const membership = await this.ensureGuildMembership(input.guildDiscordId, actorUser.id);
     if (!membership) {
       return {

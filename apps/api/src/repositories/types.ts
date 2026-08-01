@@ -226,6 +226,7 @@ export interface CommandAccessResult {
   actor?: {
     userId: string;
     tenantRole: TenantRole;
+    platformRole?: PlatformRole;
   };
   allowed: boolean;
   reason?: "NO_USER" | "NO_MEMBERSHIP" | "ROLE_TOO_LOW" | "CHANNEL_DENIED" | "CHANNEL_NOT_ALLOWED";

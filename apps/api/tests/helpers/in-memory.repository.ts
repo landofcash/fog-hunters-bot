@@ -358,6 +358,18 @@ export class InMemoryRepository implements AppRepository {
     };
     const actor = await this.getUserByDiscordId(input.actorDiscordUserId);
     if (!actor) return { guild, policy, allowed: false, reason: "NO_USER" };
+    if (actor.platformRole === "PLATFORM_ADMIN") {
+      return {
+        guild,
+        policy,
+        actor: {
+          userId: actor.id,
+          tenantRole: "OWNER",
+          platformRole: "PLATFORM_ADMIN",
+        },
+        allowed: true,
+      };
+    }
     const membership = await this.ensureGuildMembership(input.guildDiscordId, actor.id);
     if (!membership) return { guild, policy, allowed: false, reason: "NO_MEMBERSHIP" };
 
