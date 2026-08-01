@@ -47,6 +47,37 @@ describe("role enforcement", () => {
     expect(response.body.error.code).toBe("INSUFFICIENT_ROLE");
   });
 
+  it("allows a platform administrator to manage administrators without guild membership", async () => {
+    const { app, repo, config } = await createTestApp();
+    closeApp = () => app.close();
+    config.platformAdminDiscordIds.add("platform_role_manager");
+    const guild = repo.seedGuild("guild-platform-role", "Platform Managed Guild");
+    const platform = await createAuthenticatedAgent(app, "discord_platform_role_manager");
+    const target = await createAuthenticatedAgent(app, "discord_platform_role_target");
+    repo.seedMembership({ guildId: guild.id, userId: target.userId, tenantRole: "USER" });
+
+    const promoted = await platform.agent
+      .put(`/api/v1/guilds/${guild.discordGuildId}/roles/${target.userId}`)
+      .set("x-csrf-token", platform.csrfToken)
+      .send({ tenantRole: "ADMIN" });
+
+    expect(promoted.status).toBe(200);
+    expect(promoted.body.membership.tenantRole).toBe("ADMIN");
+    expect(repo.auditLogs.at(-1)).toMatchObject({
+      actorUserId: platform.userId,
+      actorType: "PLATFORM_ADMIN",
+      action: "member.role.updated",
+    });
+
+    const demoted = await platform.agent
+      .put(`/api/v1/guilds/${guild.discordGuildId}/roles/${target.userId}`)
+      .set("x-csrf-token", platform.csrfToken)
+      .send({ tenantRole: "USER" });
+
+    expect(demoted.status).toBe(200);
+    expect(demoted.body.membership.tenantRole).toBe("USER");
+  });
+
   it("prevents demoting the last owner", async () => {
     const { app, repo } = await createTestApp();
     closeApp = () => app.close();

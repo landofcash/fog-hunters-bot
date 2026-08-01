@@ -28,7 +28,7 @@ export function PlatformGuildsPage() {
       <PageHeader
         eyebrow="Platform administration"
         title="All guilds"
-        description="Inspect every registered guild, its assigned model, and effective AI access."
+        description="Inspect every registered guild, manage its administrators, and control its platform AI policy."
         action={<Badge className="h-7 px-3">PLATFORM ADMIN</Badge>}
       />
       <div className="relative max-w-md">
@@ -74,10 +74,15 @@ export function PlatformGuildsPage() {
                     </Badge>
                   )}
                 </TableCell>
-                <TableCell className="text-right">
-                  <Button asChild size="sm" variant="outline">
-                    <Link to={`/guilds/${guild.guildId}/overview`}>Inspect</Link>
-                  </Button>
+                <TableCell>
+                  <div className="flex justify-end gap-2">
+                    <Button asChild size="sm" variant="outline">
+                      <Link to={`/guilds/${guild.guildId}/administrators`}>Administrators</Link>
+                    </Button>
+                    <Button asChild size="sm" variant="outline">
+                      <Link to={`/guilds/${guild.guildId}/overview`}>Inspect</Link>
+                    </Button>
+                  </div>
                 </TableCell>
               </TableRow>
             ))}
