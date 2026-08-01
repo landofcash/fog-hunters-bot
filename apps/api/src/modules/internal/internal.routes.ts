@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
+  internalAdminListBodySchema,
+  internalAdminMutationBodySchema,
   internalBootstrapBodySchema,
   internalLlmChannelToggleBodySchema,
   internalLlmMemoryClearBodySchema,
@@ -36,13 +38,14 @@ async function assertCommandAccess(input: {
   actorDiscordUserId: string;
   commandKey: string;
   channelId?: string;
-}): Promise<{ actorUserId?: string }> {
+  defaultMinRole?: "OWNER" | "ADMIN" | "MODERATOR" | "USER";
+}): Promise<{ actorUserId?: string; actorRole?: "OWNER" | "ADMIN" | "MODERATOR" | "USER" }> {
   const access = await input.app.repository.checkCommandAccess({
     guildDiscordId: input.guildId,
     commandKey: input.commandKey,
     actorDiscordUserId: input.actorDiscordUserId,
     channelId: input.channelId,
-    defaultMinRole: "ADMIN",
+    defaultMinRole: input.defaultMinRole ?? "ADMIN",
   });
 
   if (!access.allowed) {
@@ -54,6 +57,7 @@ async function assertCommandAccess(input: {
 
   return {
     actorUserId: access.actor?.userId,
+    actorRole: access.actor?.tenantRole,
   };
 }
 
@@ -88,12 +92,19 @@ export async function registerInternalRoutes(app: FastifyInstance): Promise<void
         action: "guild.bootstrap",
         entityType: "guild",
         entityId: bootstrap.guild.id,
+        before: bootstrap.ownerChanged
+          ? {
+              ownerDiscordUserId: bootstrap.previousOwnerDiscordUserId,
+            }
+          : undefined,
         after: {
           guildId: bootstrap.guild.id,
           guildDiscordId: bootstrap.guild.discordGuildId,
           guildName: bootstrap.guild.name,
           guildCreated: bootstrap.guildCreated,
           ownerMembershipCreated: bootstrap.ownerMembershipCreated,
+          ownerChanged: bootstrap.ownerChanged,
+          ownerDiscordUserId: bootstrap.ownerDiscordUserId,
         },
       });
 
@@ -153,6 +164,158 @@ export async function registerInternalRoutes(app: FastifyInstance): Promise<void
         guild: settings.guild,
         features: settings.features,
         commands: settings.commands,
+      };
+    });
+
+    internalApp.post("/guilds/:guildId/admins/list", async (request) => {
+      const params = guildParamsSchema.parse(request.params);
+      const body = internalAdminListBodySchema.parse(request.body ?? {});
+      await assertCommandAccess({
+        app: internalApp,
+        guildId: params.guildId,
+        actorDiscordUserId: body.actorDiscordUserId,
+        channelId: body.channelId,
+        commandKey: "settings.admin.list",
+      });
+
+      const members = await internalApp.repository.listGuildAdministrators(params.guildId);
+      return {
+        owners: members.filter((member) => member.tenantRole === "OWNER"),
+        admins: members.filter((member) => member.tenantRole === "ADMIN"),
+      };
+    });
+
+    internalApp.post("/guilds/:guildId/admins/add", async (request) => {
+      const params = guildParamsSchema.parse(request.params);
+      const body = internalAdminMutationBodySchema.parse(request.body ?? {});
+      const access = await assertCommandAccess({
+        app: internalApp,
+        guildId: params.guildId,
+        actorDiscordUserId: body.actorDiscordUserId,
+        channelId: body.channelId,
+        commandKey: "settings.admin.add",
+        defaultMinRole: "OWNER",
+      });
+      if (access.actorRole !== "OWNER") {
+        throw new ApiError(403, "OWNER_REQUIRED", "Only the guild OWNER can manage admins.");
+      }
+
+      const targetUser = await internalApp.repository.upsertUserFromDiscord(
+        body.target,
+        internalApp.appConfig.platformAdminDiscordIds.has(body.target.discordUserId),
+      );
+      const target = await internalApp.repository.upsertGuildMembership(params.guildId, targetUser.id);
+      if (!target) {
+        throw new ApiError(404, "GUILD_NOT_FOUND", "Guild not found.");
+      }
+
+      if (target.membership.tenantRole === "OWNER") {
+        return {
+          changed: false,
+          reason: "OWNER_ALREADY_PRIVILEGED",
+          membership: target.membership,
+        };
+      }
+      if (target.membership.tenantRole === "ADMIN") {
+        return {
+          changed: false,
+          reason: "ALREADY_ADMIN",
+          membership: target.membership,
+        };
+      }
+
+      const update = await internalApp.repository.updateGuildMemberRole({
+        guildDiscordId: params.guildId,
+        targetUserId: targetUser.id,
+        role: "ADMIN",
+      });
+      if (!update) {
+        throw new ApiError(404, "MEMBERSHIP_NOT_FOUND", "Guild membership not found.");
+      }
+
+      const audit = await internalApp.repository.createAuditLog({
+        guildId: update.guild.id,
+        actorUserId: access.actorUserId,
+        actorType: "USER",
+        action: "member.admin.added",
+        entityType: "guild_member",
+        entityId: `${update.after.guildId}:${update.after.userId}`,
+        before: update.before as unknown as Record<string, unknown>,
+        after: update.after as unknown as Record<string, unknown>,
+        metadata: {
+          targetDiscordUserId: body.target.discordUserId,
+          membershipCreated: target.created,
+        },
+      });
+
+      return {
+        changed: true,
+        membership: update.after,
+        auditLogId: audit.id,
+      };
+    });
+
+    internalApp.post("/guilds/:guildId/admins/remove", async (request) => {
+      const params = guildParamsSchema.parse(request.params);
+      const body = internalAdminMutationBodySchema.parse(request.body ?? {});
+      const access = await assertCommandAccess({
+        app: internalApp,
+        guildId: params.guildId,
+        actorDiscordUserId: body.actorDiscordUserId,
+        channelId: body.channelId,
+        commandKey: "settings.admin.remove",
+        defaultMinRole: "OWNER",
+      });
+      if (access.actorRole !== "OWNER") {
+        throw new ApiError(403, "OWNER_REQUIRED", "Only the guild OWNER can manage admins.");
+      }
+
+      const targetUser = await internalApp.repository.upsertUserFromDiscord(
+        body.target,
+        internalApp.appConfig.platformAdminDiscordIds.has(body.target.discordUserId),
+      );
+      const membership = await internalApp.repository.getMembershipByDiscordUser(
+        params.guildId,
+        body.target.discordUserId,
+      );
+      if (membership?.tenantRole === "OWNER" && membership.status === "ACTIVE") {
+        throw new ApiError(409, "OWNER_PROTECTED", "The guild OWNER cannot be removed as an admin.");
+      }
+      if (!membership || membership.status !== "ACTIVE" || membership.tenantRole !== "ADMIN") {
+        return {
+          changed: false,
+          reason: "NOT_ADMIN",
+          membership: membership ?? null,
+        };
+      }
+
+      const update = await internalApp.repository.updateGuildMemberRole({
+        guildDiscordId: params.guildId,
+        targetUserId: targetUser.id,
+        role: "USER",
+      });
+      if (!update) {
+        throw new ApiError(404, "MEMBERSHIP_NOT_FOUND", "Guild membership not found.");
+      }
+
+      const audit = await internalApp.repository.createAuditLog({
+        guildId: update.guild.id,
+        actorUserId: access.actorUserId,
+        actorType: "USER",
+        action: "member.admin.removed",
+        entityType: "guild_member",
+        entityId: `${update.after.guildId}:${update.after.userId}`,
+        before: update.before as unknown as Record<string, unknown>,
+        after: update.after as unknown as Record<string, unknown>,
+        metadata: {
+          targetDiscordUserId: body.target.discordUserId,
+        },
+      });
+
+      return {
+        changed: true,
+        membership: update.after,
+        auditLogId: audit.id,
       };
     });
 

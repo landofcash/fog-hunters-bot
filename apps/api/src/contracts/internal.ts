@@ -26,6 +26,15 @@ export const internalSettingsReadBodySchema = z.object({
   channelId: z.string().optional(),
 });
 
+export const internalAdminListBodySchema = z.object({
+  actorDiscordUserId: z.string().min(1),
+  channelId: z.string().optional(),
+});
+
+export const internalAdminMutationBodySchema = internalAdminListBodySchema.extend({
+  target: internalUserTouchBodySchema,
+});
+
 export const internalLlmRespondBodySchema = z.object({
   guildId: z.string().min(1).optional(),
   channelId: z.string().min(1).optional(),

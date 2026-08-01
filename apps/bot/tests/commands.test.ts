@@ -56,4 +56,22 @@ describe("command definitions", () => {
     expect(promptSet?.options?.find((option) => option.name === "type")?.choices?.map((choice) => choice.value))
       .toEqual(["assistant", "gatekeeper"]);
   });
+
+  it("defines owner-managed admin commands without exposing role choices", () => {
+    const settings = commandDefinitions.find((command) => command.name === "settings") as any;
+    const view = settings?.options?.find((option: any) => option.name === "view");
+    const admin = settings?.options?.find((option: any) => option.name === "admin");
+    expect(view).toBeDefined();
+    expect(admin?.options?.map((option: any) => option.name).sort()).toEqual(["add", "list", "remove"]);
+
+    for (const name of ["add", "remove"]) {
+      const subcommand = admin?.options?.find((option: any) => option.name === name);
+      expect(subcommand?.options).toEqual([
+        expect.objectContaining({
+          name: "user",
+          required: true,
+        }),
+      ]);
+    }
+  });
 });

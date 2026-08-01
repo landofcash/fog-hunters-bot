@@ -90,6 +90,251 @@ describe("internal bot integration routes", () => {
     expect(denied.json().error.code).toBe("COMMAND_ACCESS_DENIED");
   });
 
+  it("lets the owner manage admins while admins can only list them", async () => {
+    const { app, repo } = await createTestApp();
+    closeApp = () => app.close();
+    const headers = { "x-internal-key": "test_internal_api_key" };
+    const guildId = "guild-admin-management";
+    const ownerDiscordUserId = "discord_admin_owner";
+    const adminDiscordUserId = "discord_new_admin";
+
+    await app.inject({
+      method: "POST",
+      url: `/api/v1/internal/guilds/${guildId}/bootstrap`,
+      headers,
+      payload: {
+        guildName: "Admin Management Guild",
+        owner: {
+          discordUserId: ownerDiscordUserId,
+          username: "admin_owner",
+        },
+      },
+    });
+
+    const added = await app.inject({
+      method: "POST",
+      url: `/api/v1/internal/guilds/${guildId}/admins/add`,
+      headers,
+      payload: {
+        actorDiscordUserId: ownerDiscordUserId,
+        channelId: "settings-channel",
+        target: {
+          discordUserId: adminDiscordUserId,
+          username: "new_admin",
+        },
+      },
+    });
+    expect(added.statusCode).toBe(200);
+    expect(added.json()).toMatchObject({
+      changed: true,
+      membership: { tenantRole: "ADMIN", status: "ACTIVE" },
+    });
+    expect(await repo.getMembershipByDiscordUser(guildId, adminDiscordUserId)).toMatchObject({
+      tenantRole: "ADMIN",
+    });
+    expect(repo.auditLogs.at(-1)?.action).toBe("member.admin.added");
+
+    const repeated = await app.inject({
+      method: "POST",
+      url: `/api/v1/internal/guilds/${guildId}/admins/add`,
+      headers,
+      payload: {
+        actorDiscordUserId: ownerDiscordUserId,
+        target: {
+          discordUserId: adminDiscordUserId,
+          username: "new_admin",
+        },
+      },
+    });
+    expect(repeated.statusCode).toBe(200);
+    expect(repeated.json()).toMatchObject({ changed: false, reason: "ALREADY_ADMIN" });
+
+    const listed = await app.inject({
+      method: "POST",
+      url: `/api/v1/internal/guilds/${guildId}/admins/list`,
+      headers,
+      payload: {
+        actorDiscordUserId: adminDiscordUserId,
+      },
+    });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().owners).toEqual([
+      expect.objectContaining({ discordUserId: ownerDiscordUserId, tenantRole: "OWNER" }),
+    ]);
+    expect(listed.json().admins).toEqual([
+      expect.objectContaining({ discordUserId: adminDiscordUserId, tenantRole: "ADMIN" }),
+    ]);
+
+    const adminCannotAdd = await app.inject({
+      method: "POST",
+      url: `/api/v1/internal/guilds/${guildId}/admins/add`,
+      headers,
+      payload: {
+        actorDiscordUserId: adminDiscordUserId,
+        target: {
+          discordUserId: "discord_other_admin",
+          username: "other_admin",
+        },
+      },
+    });
+    expect(adminCannotAdd.statusCode).toBe(403);
+    expect(adminCannotAdd.json().error.code).toBe("COMMAND_ACCESS_DENIED");
+
+    const removed = await app.inject({
+      method: "POST",
+      url: `/api/v1/internal/guilds/${guildId}/admins/remove`,
+      headers,
+      payload: {
+        actorDiscordUserId: ownerDiscordUserId,
+        target: {
+          discordUserId: adminDiscordUserId,
+          username: "new_admin",
+        },
+      },
+    });
+    expect(removed.statusCode).toBe(200);
+    expect(removed.json()).toMatchObject({
+      changed: true,
+      membership: { tenantRole: "USER" },
+    });
+    expect(repo.auditLogs.at(-1)?.action).toBe("member.admin.removed");
+
+    const ownerProtected = await app.inject({
+      method: "POST",
+      url: `/api/v1/internal/guilds/${guildId}/admins/remove`,
+      headers,
+      payload: {
+        actorDiscordUserId: ownerDiscordUserId,
+        target: {
+          discordUserId: ownerDiscordUserId,
+          username: "admin_owner",
+        },
+      },
+    });
+    expect(ownerProtected.statusCode).toBe(409);
+    expect(ownerProtected.json().error.code).toBe("OWNER_PROTECTED");
+  });
+
+  it("reconciles Discord ownership before authorizing admin mutations", async () => {
+    const { app, repo } = await createTestApp();
+    closeApp = () => app.close();
+    const headers = { "x-internal-key": "test_internal_api_key" };
+    const guildId = "guild-owner-transfer";
+    const bootstrapUrl = `/api/v1/internal/guilds/${guildId}/bootstrap`;
+
+    await app.inject({
+      method: "POST",
+      url: bootstrapUrl,
+      headers,
+      payload: {
+        guildName: "Ownership Transfer Guild",
+        owner: {
+          discordUserId: "former-owner",
+          username: "former_owner",
+        },
+      },
+    });
+
+    const coOwner = await repo.upsertUserFromDiscord({
+      discordUserId: "co-owner",
+      username: "co_owner",
+    }, false);
+    await repo.upsertGuildMembership(guildId, coOwner.id);
+    await repo.updateGuildMemberRole({
+      guildDiscordId: guildId,
+      targetUserId: coOwner.id,
+      role: "OWNER",
+    });
+
+    await app.inject({
+      method: "POST",
+      url: bootstrapUrl,
+      headers,
+      payload: {
+        guildName: "Ownership Transfer Guild",
+        owner: {
+          discordUserId: "former-owner",
+          username: "former_owner",
+        },
+      },
+    });
+    expect(await repo.getMembershipByDiscordUser(guildId, "co-owner")).toMatchObject({
+      tenantRole: "OWNER",
+      status: "ACTIVE",
+    });
+
+    await app.inject({
+      method: "POST",
+      url: bootstrapUrl,
+      headers,
+      payload: {
+        guildName: "Ownership Transfer Guild",
+        owner: {
+          discordUserId: "current-owner",
+          username: "current_owner",
+        },
+      },
+    });
+
+    expect(await repo.getMembershipByDiscordUser(guildId, "former-owner")).toMatchObject({
+      tenantRole: "USER",
+      status: "ACTIVE",
+    });
+    expect(await repo.getMembershipByDiscordUser(guildId, "current-owner")).toMatchObject({
+      tenantRole: "OWNER",
+      status: "ACTIVE",
+    });
+    expect(await repo.getMembershipByDiscordUser(guildId, "co-owner")).toMatchObject({
+      tenantRole: "OWNER",
+      status: "ACTIVE",
+    });
+
+    const formerOwnerDenied = await app.inject({
+      method: "POST",
+      url: `/api/v1/internal/guilds/${guildId}/admins/add`,
+      headers,
+      payload: {
+        actorDiscordUserId: "former-owner",
+        target: {
+          discordUserId: "former-owner-target",
+          username: "former_owner_target",
+        },
+      },
+    });
+    expect(formerOwnerDenied.statusCode).toBe(403);
+
+    const currentOwnerAllowed = await app.inject({
+      method: "POST",
+      url: `/api/v1/internal/guilds/${guildId}/admins/add`,
+      headers,
+      payload: {
+        actorDiscordUserId: "current-owner",
+        target: {
+          discordUserId: "current-owner-target",
+          username: "current_owner_target",
+        },
+      },
+    });
+    expect(currentOwnerAllowed.statusCode).toBe(200);
+    expect(currentOwnerAllowed.json()).toMatchObject({
+      changed: true,
+      membership: { tenantRole: "ADMIN" },
+    });
+
+    await app.inject({
+      method: "POST",
+      url: bootstrapUrl,
+      headers,
+      payload: {
+        guildName: "Ownership Transfer Guild",
+      },
+    });
+    expect(await repo.getMembershipByDiscordUser(guildId, "current-owner")).toMatchObject({
+      tenantRole: "OWNER",
+      status: "ACTIVE",
+    });
+  });
+
   it("supports internal LLM admin flows and respects disabled defaults", async () => {
     const { app } = await createTestApp();
     closeApp = () => app.close();
@@ -240,6 +485,9 @@ describe("internal bot integration routes", () => {
       .map((policy) => policy.commandKey);
     expect(commandKeys).not.toContain("ai.style");
     expect(commandKeys).toEqual(expect.arrayContaining([
+      "settings.admin.list",
+      "settings.admin.add",
+      "settings.admin.remove",
       "ai.prompt.view",
       "ai.prompt.set",
       "ai.prompt.reset",

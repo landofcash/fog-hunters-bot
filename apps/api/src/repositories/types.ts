@@ -41,6 +41,9 @@ export interface BootstrapGuildResult {
   guild: GuildRecord;
   guildCreated: boolean;
   ownerMembershipCreated: boolean;
+  ownerChanged: boolean;
+  previousOwnerDiscordUserId: string | null;
+  ownerDiscordUserId: string | null;
 }
 
 export interface MembershipRecord {
@@ -230,6 +233,10 @@ export interface AppRepository {
     guildDiscordId: string,
     userId: string,
   ): Promise<{ guild: GuildRecord; membership: MembershipRecord } | null>;
+  upsertGuildMembership(
+    guildDiscordId: string,
+    userId: string,
+  ): Promise<{ guild: GuildRecord; membership: MembershipRecord; created: boolean } | null>;
   getMembershipByDiscordUser(guildDiscordId: string, discordUserId: string): Promise<MembershipRecord | null>;
   getCommandPermission(guildDiscordId: string, commandKey: string): Promise<CommandPermissionRecord | null>;
   checkCommandAccess(input: {
@@ -255,6 +262,7 @@ export interface AppRepository {
     denyChannels: string[];
   }): Promise<{ previous?: CommandPermissionRecord; current: CommandPermissionRecord }>;
   listGuildMembers(guildDiscordId: string, limit: number, cursor?: string): Promise<CursorPage<GuildMemberListItem>>;
+  listGuildAdministrators(guildDiscordId: string): Promise<GuildMemberListItem[]>;
   updateGuildMemberRole(input: {
     guildDiscordId: string;
     targetUserId: string;

@@ -218,6 +218,10 @@ export class PrismaAppRepository extends TenantRepositoryBase implements AppRepo
         where: { discordGuildId: input.guildDiscordId },
       });
 
+      if (existingGuild) {
+        await tx.$queryRaw`SELECT id FROM guilds WHERE id = ${existingGuild.id}::uuid FOR UPDATE`;
+      }
+
       const guild = existingGuild
         ? await tx.guild.update({
             where: { id: existingGuild.id },
@@ -280,6 +284,8 @@ export class PrismaAppRepository extends TenantRepositoryBase implements AppRepo
       });
 
       let ownerMembershipCreated = false;
+      const previousOwnerDiscordUserId = guild.ownerDiscordUserId ?? null;
+      let ownerDiscordUserId = previousOwnerDiscordUserId;
       if (input.ownerProfile) {
         const ownerUser = await tx.user.upsert({
           where: { discordUserId: input.ownerProfile.discordUserId },
@@ -298,14 +304,6 @@ export class PrismaAppRepository extends TenantRepositoryBase implements AppRepo
           },
         });
 
-        const ownerCount = await tx.guildMember.count({
-          where: {
-            guildId: guild.id,
-            tenantRole: "OWNER",
-            status: "ACTIVE",
-          },
-        });
-
         const existingMembership = await tx.guildMember.findUnique({
           where: {
             guildId_userId: {
@@ -315,39 +313,56 @@ export class PrismaAppRepository extends TenantRepositoryBase implements AppRepo
           },
         });
 
-        if (ownerCount === 0) {
-          ownerMembershipCreated = true;
-          await tx.guildMember.upsert({
-            where: {
-              guildId_userId: {
+        const ownershipTransferred =
+          previousOwnerDiscordUserId !== null &&
+          previousOwnerDiscordUserId !== input.ownerProfile.discordUserId;
+        if (ownershipTransferred) {
+          const previousOwnerUser = await tx.user.findUnique({
+            where: { discordUserId: previousOwnerDiscordUserId },
+            select: { id: true },
+          });
+          if (previousOwnerUser) {
+            await tx.guildMember.updateMany({
+              where: {
                 guildId: guild.id,
-                userId: ownerUser.id,
+                userId: previousOwnerUser.id,
+                tenantRole: "OWNER",
               },
-            },
-            create: {
-              guildId: guild.id,
-              userId: ownerUser.id,
-              tenantRole: "OWNER",
-              status: "ACTIVE",
-              joinedAt: new Date(),
-            },
-            update: {
-              tenantRole: "OWNER",
-              status: "ACTIVE",
-            },
-          });
-        } else if (!existingMembership) {
-          ownerMembershipCreated = true;
-          await tx.guildMember.create({
-            data: {
-              guildId: guild.id,
-              userId: ownerUser.id,
-              tenantRole: "USER",
-              status: "ACTIVE",
-              joinedAt: new Date(),
-            },
-          });
+              data: {
+                tenantRole: "USER",
+              },
+            });
+          }
         }
+
+        ownerMembershipCreated = !existingMembership;
+        await tx.guildMember.upsert({
+          where: {
+            guildId_userId: {
+              guildId: guild.id,
+              userId: ownerUser.id,
+            },
+          },
+          create: {
+            guildId: guild.id,
+            userId: ownerUser.id,
+            tenantRole: "OWNER",
+            status: "ACTIVE",
+            joinedAt: new Date(),
+          },
+          update: {
+            tenantRole: "OWNER",
+            status: "ACTIVE",
+          },
+        });
+
+        await tx.guild.update({
+          where: { id: guild.id },
+          data: {
+            ownerDiscordUserId: input.ownerProfile.discordUserId,
+          },
+        });
+        ownerDiscordUserId = input.ownerProfile.discordUserId;
       }
 
       return {
@@ -358,6 +373,9 @@ export class PrismaAppRepository extends TenantRepositoryBase implements AppRepo
         },
         guildCreated: !existingGuild,
         ownerMembershipCreated,
+        ownerChanged: previousOwnerDiscordUserId !== ownerDiscordUserId,
+        previousOwnerDiscordUserId,
+        ownerDiscordUserId,
       };
     });
   }
@@ -415,6 +433,53 @@ export class PrismaAppRepository extends TenantRepositoryBase implements AppRepo
         tenantRole: membership.tenantRole as TenantRole,
         status: membership.status as MemberStatus,
       },
+    };
+  }
+
+  async upsertGuildMembership(
+    guildDiscordId: string,
+    userId: string,
+  ): Promise<{ guild: GuildRecord; membership: MembershipRecord; created: boolean } | null> {
+    const guild = await this.prisma.guild.findUnique({
+      where: { discordGuildId: guildDiscordId },
+    });
+    if (!guild) return null;
+
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) return null;
+
+    const existing = await this.prisma.guildMember.findUnique({
+      where: { guildId_userId: { guildId: guild.id, userId } },
+    });
+    const membership = await this.prisma.guildMember.upsert({
+      where: { guildId_userId: { guildId: guild.id, userId } },
+      create: {
+        guildId: guild.id,
+        userId,
+        tenantRole: "USER",
+        status: "ACTIVE",
+        joinedAt: new Date(),
+        lastSeenAt: new Date(),
+      },
+      update: {
+        status: "ACTIVE",
+        lastSeenAt: new Date(),
+      },
+    });
+
+    return {
+      guild: {
+        id: guild.id,
+        discordGuildId: guild.discordGuildId,
+        name: guild.name,
+      },
+      membership: {
+        guildId: membership.guildId,
+        userId: membership.userId,
+        tenantRole: membership.tenantRole as TenantRole,
+        status: membership.status as MemberStatus,
+      },
+      created: !existing,
     };
   }
 
@@ -756,6 +821,27 @@ export class PrismaAppRepository extends TenantRepositoryBase implements AppRepo
       items,
       nextCursor: hasMore ? encodeOffsetCursor(offset + limit) : undefined,
     };
+  }
+
+  async listGuildAdministrators(guildDiscordId: string): Promise<GuildMemberListItem[]> {
+    const guildId = await this.resolveGuildId(guildDiscordId);
+    const rows = await this.prisma.guildMember.findMany({
+      where: {
+        guildId,
+        status: "ACTIVE",
+        tenantRole: { in: ["OWNER", "ADMIN"] },
+      },
+      include: { user: true },
+      orderBy: [{ tenantRole: "asc" }, { createdAt: "asc" }, { userId: "asc" }],
+    });
+
+    return rows.map((row: any) => ({
+      userId: row.userId,
+      discordUserId: row.user.discordUserId,
+      username: row.user.username,
+      tenantRole: row.tenantRole as TenantRole,
+      status: row.status as MemberStatus,
+    }));
   }
 
   async updateGuildMemberRole(input: {

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { handleAiCommand } from "../src/commands/protected/ai";
+import { handleSettingsAdminCommand } from "../src/commands/protected/settings-admin";
 import { handleSettingsViewCommand } from "../src/commands/protected/settings-view";
 import { ApiClientError } from "../src/runtime/errors";
 import { createApiClientMock, createInteractionMock } from "./helpers/fixtures";
@@ -39,6 +40,126 @@ describe("protected command handlers", () => {
       await handleSettingsViewCommand(client, interaction);
       expect(interaction.editReply).toHaveBeenCalledWith({ content: expect.stringContaining(message) });
     }
+  });
+
+  it("adds and removes admins through owner-only API operations", async () => {
+    const targetUser = {
+      id: "target-1",
+      username: "target",
+      globalName: "Target",
+      bot: false,
+      displayAvatarURL: vi.fn().mockReturnValue("https://avatar.test/target.png"),
+    };
+    const addGuildAdmin = vi.fn().mockResolvedValue({
+      changed: true,
+      membership: { tenantRole: "ADMIN" },
+    });
+    const removeGuildAdmin = vi.fn().mockResolvedValue({
+      changed: true,
+      membership: { tenantRole: "USER" },
+    });
+    const apiClient = createApiClientMock({ addGuildAdmin, removeGuildAdmin });
+
+    for (const [subcommand, method] of [
+      ["add", addGuildAdmin],
+      ["remove", removeGuildAdmin],
+    ] as const) {
+      const interaction = createInteractionMock({
+        commandName: "settings",
+        options: {
+          getSubcommand: vi.fn().mockReturnValue(subcommand),
+          getSubcommandGroup: vi.fn().mockReturnValue("admin"),
+          getUser: vi.fn().mockReturnValue(targetUser),
+        },
+      });
+
+      await handleSettingsAdminCommand(apiClient, interaction);
+
+      expect(method).toHaveBeenCalledWith({
+        guildId: "guild-1",
+        actorDiscordUserId: "user-1",
+        channelId: "channel-1",
+        target: {
+          discordUserId: "target-1",
+          username: "target",
+          globalName: "Target",
+          avatarUrl: "https://avatar.test/target.png",
+        },
+      });
+      expect(interaction.editReply).toHaveBeenCalledWith(expect.objectContaining({
+        content: expect.stringContaining("<@target-1>"),
+        allowedMentions: { users: [] },
+      }));
+    }
+  });
+
+  it("lists owners and admins without pinging them", async () => {
+    const listGuildAdmins = vi.fn().mockResolvedValue({
+      owners: [{ discordUserId: "owner-1" }],
+      admins: [{ discordUserId: "admin-1" }],
+    });
+    const interaction = createInteractionMock({
+      commandName: "settings",
+      options: {
+        getSubcommand: vi.fn().mockReturnValue("list"),
+        getSubcommandGroup: vi.fn().mockReturnValue("admin"),
+      },
+    });
+
+    await handleSettingsAdminCommand(createApiClientMock({ listGuildAdmins }), interaction);
+
+    expect(listGuildAdmins).toHaveBeenCalledWith({
+      guildId: "guild-1",
+      actorDiscordUserId: "user-1",
+      channelId: "channel-1",
+    });
+    expect(interaction.editReply).toHaveBeenCalledWith({
+      content: expect.stringContaining("<@admin-1>"),
+      allowedMentions: { users: [] },
+    });
+  });
+
+  it("rejects bot targets and maps owner-only errors", async () => {
+    const botTarget = createInteractionMock({
+      commandName: "settings",
+      options: {
+        getSubcommand: vi.fn().mockReturnValue("add"),
+        getSubcommandGroup: vi.fn().mockReturnValue("admin"),
+        getUser: vi.fn().mockReturnValue({
+          id: "bot-1",
+          username: "bot",
+          bot: true,
+          displayAvatarURL: vi.fn().mockReturnValue(null),
+        }),
+      },
+    });
+    const addGuildAdmin = vi.fn();
+    await handleSettingsAdminCommand(createApiClientMock({ addGuildAdmin }), botTarget);
+    expect(addGuildAdmin).not.toHaveBeenCalled();
+    expect(botTarget.reply).toHaveBeenCalledWith(expect.objectContaining({
+      content: expect.stringContaining("Bot accounts"),
+    }));
+
+    const denied = createInteractionMock({
+      commandName: "settings",
+      options: {
+        getSubcommand: vi.fn().mockReturnValue("remove"),
+        getSubcommandGroup: vi.fn().mockReturnValue("admin"),
+        getUser: vi.fn().mockReturnValue({
+          id: "target-1",
+          username: "target",
+          globalName: null,
+          bot: false,
+          displayAvatarURL: vi.fn().mockReturnValue(null),
+        }),
+      },
+    });
+    await handleSettingsAdminCommand(createApiClientMock({
+      removeGuildAdmin: vi.fn().mockRejectedValue(new ApiClientError(403, "Owner required", "OWNER_REQUIRED")),
+    }), denied);
+    expect(denied.editReply).toHaveBeenCalledWith({
+      content: expect.stringContaining("Only the server owner"),
+    });
   });
 
   it("rejects protected commands in direct messages", async () => {

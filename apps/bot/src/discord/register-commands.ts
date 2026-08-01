@@ -8,7 +8,39 @@ export const commandDefinitions = [
   new SlashCommandBuilder()
     .setName("settings")
     .setDescription("Guild settings commands")
-    .addSubcommand((sub) => sub.setName("view").setDescription("View guild bot settings")),
+    .addSubcommand((sub) => sub.setName("view").setDescription("View guild bot settings"))
+    .addSubcommandGroup((group) =>
+      group
+        .setName("admin")
+        .setDescription("Manage FHAIBot admins")
+        .addSubcommand((sub) =>
+          sub
+            .setName("add")
+            .setDescription("Add an FHAIBot admin")
+            .addUserOption((option) =>
+              option
+                .setName("user")
+                .setDescription("Server member to add")
+                .setRequired(true),
+            ),
+        )
+        .addSubcommand((sub) =>
+          sub
+            .setName("remove")
+            .setDescription("Remove an FHAIBot admin")
+            .addUserOption((option) =>
+              option
+                .setName("user")
+                .setDescription("Server member to remove")
+                .setRequired(true),
+            ),
+        )
+        .addSubcommand((sub) =>
+          sub
+            .setName("list")
+            .setDescription("List the server owner and FHAIBot admins"),
+        ),
+    ),
   new SlashCommandBuilder()
     .setName("ai")
     .setDescription("AI chat administration commands")

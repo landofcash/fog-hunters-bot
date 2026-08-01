@@ -20,6 +20,44 @@ describe("ApiClient", () => {
     expect(JSON.parse(String(request.body))).toMatchObject({ guildId: "guild-1", content: "hello" });
   });
 
+  it("maps admin management requests to protected internal endpoints", async () => {
+    const fetchMock = vi.fn().mockImplementation(async () =>
+      new Response(JSON.stringify({ changed: true, membership: { tenantRole: "ADMIN" } }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient(createBotConfig(), createLoggerMock());
+    const target = { discordUserId: "target-1", username: "target" };
+
+    await client.addGuildAdmin({
+      guildId: "guild-1",
+      actorDiscordUserId: "owner-1",
+      channelId: "channel-1",
+      target,
+    });
+    await client.removeGuildAdmin({
+      guildId: "guild-1",
+      actorDiscordUserId: "owner-1",
+      channelId: "channel-1",
+      target,
+    });
+    await client.listGuildAdmins({
+      guildId: "guild-1",
+      actorDiscordUserId: "owner-1",
+      channelId: "channel-1",
+    });
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "https://api.test/api/v1/internal/guilds/guild-1/admins/add",
+      "https://api.test/api/v1/internal/guilds/guild-1/admins/remove",
+      "https://api.test/api/v1/internal/guilds/guild-1/admins/list",
+    ]);
+    expect(JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body))).toEqual({
+      actorDiscordUserId: "owner-1",
+      channelId: "channel-1",
+      target,
+    });
+  });
+
   it("returns structured API errors without retrying 4xx responses", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: { code: "COMMAND_ACCESS_DENIED", message: "Denied", details: { reason: "ROLE_TOO_LOW" } } }), { status: 403 }));
     vi.stubGlobal("fetch", fetchMock);

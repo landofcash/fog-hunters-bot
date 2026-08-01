@@ -2,6 +2,7 @@ import { MessageFlags, type ChatInputCommandInteraction } from "discord.js";
 import type { Logger } from "pino";
 import type { ApiClient } from "../api/client";
 import { handleAiCommand } from "../commands/protected/ai";
+import { handleSettingsAdminCommand } from "../commands/protected/settings-admin";
 import { handleSettingsViewCommand } from "../commands/protected/settings-view";
 import { handleHelpCommand } from "../commands/public/help";
 import { handlePingCommand } from "../commands/public/ping";
@@ -20,6 +21,11 @@ export async function routeCommand(input: {
       await handleHelpCommand(interaction);
       return;
     case "settings": {
+      const group = interaction.options.getSubcommandGroup(false);
+      if (group === "admin") {
+        await handleSettingsAdminCommand(apiClient, interaction);
+        return;
+      }
       const sub = interaction.options.getSubcommand(false);
       if (sub === "view") {
         await handleSettingsViewCommand(apiClient, interaction);

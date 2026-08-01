@@ -4,6 +4,7 @@ import { ApiClient } from "./api/client";
 import { loadConfig } from "./config";
 import { createDiscordClient } from "./discord/client";
 import { handleGuildCreateEvent } from "./events/guild-create";
+import { handleGuildUpdateEvent } from "./events/guild-update";
 import { handleInteractionCreateEvent } from "./events/interaction-create";
 import { handleMessageCreateEvent } from "./events/message-create";
 import { handleReadyEvent } from "./events/ready";
@@ -52,6 +53,15 @@ async function main(): Promise<void> {
     } catch (error) {
       logger.error({ err: error, guildId: guild.id }, "Guild bootstrap failed");
     }
+  });
+
+  client.on(Events.GuildUpdate, async (oldGuild, newGuild) => {
+    await handleGuildUpdateEvent({
+      oldGuild,
+      newGuild,
+      apiClient,
+      logger,
+    });
   });
 
   client.on(Events.InteractionCreate, async (interaction) => {

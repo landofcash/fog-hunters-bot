@@ -15,6 +15,31 @@ export interface InternalUserTouchRequest {
   avatarUrl?: string | null;
 }
 
+export interface InternalAdminMember {
+  userId: string;
+  discordUserId: string;
+  username?: string | null;
+  tenantRole: "OWNER" | "ADMIN";
+  status: "ACTIVE" | "INVITED" | "REMOVED";
+}
+
+export interface InternalAdminListResponse {
+  owners: InternalAdminMember[];
+  admins: InternalAdminMember[];
+}
+
+export interface InternalAdminMutationResponse {
+  changed: boolean;
+  reason?: "OWNER_ALREADY_PRIVILEGED" | "ALREADY_ADMIN" | "NOT_ADMIN";
+  membership: {
+    guildId: string;
+    userId: string;
+    tenantRole: "OWNER" | "ADMIN" | "MODERATOR" | "USER";
+    status: "ACTIVE" | "INVITED" | "REMOVED";
+  } | null;
+  auditLogId?: string;
+}
+
 export interface CommandCheckResponse {
   allowed: boolean;
   reason?: "NO_USER" | "NO_MEMBERSHIP" | "ROLE_TOO_LOW" | "CHANNEL_DENIED" | "CHANNEL_NOT_ALLOWED";

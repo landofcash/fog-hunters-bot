@@ -3,6 +3,8 @@ import type { BotConfig } from "../config";
 import { ApiClientError } from "../runtime/errors";
 import type {
   CommandCheckResponse,
+  InternalAdminListResponse,
+  InternalAdminMutationResponse,
   InternalBootstrapRequest,
   InternalGuildSettingsResponse,
   InternalLlmSettingsResponse,
@@ -110,6 +112,52 @@ export class ApiClient {
         actorDiscordUserId: input.actorDiscordUserId,
         channelId: input.channelId,
         commandKey: input.commandKey ?? "settings.view",
+      }),
+    });
+  }
+
+  async listGuildAdmins(input: {
+    guildId: string;
+    actorDiscordUserId: string;
+    channelId?: string;
+  }): Promise<InternalAdminListResponse> {
+    return this.request<InternalAdminListResponse>(`/internal/guilds/${input.guildId}/admins/list`, {
+      method: "POST",
+      body: JSON.stringify({
+        actorDiscordUserId: input.actorDiscordUserId,
+        channelId: input.channelId,
+      }),
+    });
+  }
+
+  async addGuildAdmin(input: {
+    guildId: string;
+    actorDiscordUserId: string;
+    channelId?: string;
+    target: InternalUserTouchRequest;
+  }): Promise<InternalAdminMutationResponse> {
+    return this.request<InternalAdminMutationResponse>(`/internal/guilds/${input.guildId}/admins/add`, {
+      method: "POST",
+      body: JSON.stringify({
+        actorDiscordUserId: input.actorDiscordUserId,
+        channelId: input.channelId,
+        target: input.target,
+      }),
+    });
+  }
+
+  async removeGuildAdmin(input: {
+    guildId: string;
+    actorDiscordUserId: string;
+    channelId?: string;
+    target: InternalUserTouchRequest;
+  }): Promise<InternalAdminMutationResponse> {
+    return this.request<InternalAdminMutationResponse>(`/internal/guilds/${input.guildId}/admins/remove`, {
+      method: "POST",
+      body: JSON.stringify({
+        actorDiscordUserId: input.actorDiscordUserId,
+        channelId: input.channelId,
+        target: input.target,
       }),
     });
   }

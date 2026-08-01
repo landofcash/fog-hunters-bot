@@ -56,6 +56,7 @@ export class InMemoryRepository implements AppRepository {
   usersByDiscordId = new Map<string, string>();
   guilds = new Map<string, GuildRecord>();
   guildsByDiscordId = new Map<string, string>();
+  guildOwnerDiscordUserIds = new Map<string, string>();
   memberships = new Map<string, MembershipRecord>();
   features = new Map<string, FeatureFlagRecord>();
   commandPermissions = new Map<string, CommandPermissionRecord>();
@@ -194,34 +195,48 @@ export class InMemoryRepository implements AppRepository {
     }
 
     let ownerMembershipCreated = false;
+    const previousOwnerDiscordUserId = this.guildOwnerDiscordUserIds.get(guild.discordGuildId) ?? null;
+    let ownerDiscordUserId = previousOwnerDiscordUserId;
     if (input.ownerProfile) {
       const ownerUser = await this.upsertUserFromDiscord(input.ownerProfile, false);
-      const ownerCount = this.countGuildOwners(guild.id);
       const memberKey = this.membershipKey(guild.id, ownerUser.id);
       const existingMembership = this.memberships.get(memberKey);
-      if (ownerCount === 0) {
-        this.memberships.set(memberKey, {
-          guildId: guild.id,
-          userId: ownerUser.id,
-          tenantRole: "OWNER",
-          status: "ACTIVE",
-        });
-        ownerMembershipCreated = true;
-      } else if (!existingMembership) {
-        this.memberships.set(memberKey, {
-          guildId: guild.id,
-          userId: ownerUser.id,
-          tenantRole: "USER",
-          status: "ACTIVE",
-        });
-        ownerMembershipCreated = true;
+
+      if (
+        previousOwnerDiscordUserId !== null &&
+        previousOwnerDiscordUserId !== input.ownerProfile.discordUserId
+      ) {
+        const previousOwnerUserId = this.usersByDiscordId.get(previousOwnerDiscordUserId);
+        if (previousOwnerUserId) {
+          const previousOwnerMembershipKey = this.membershipKey(guild.id, previousOwnerUserId);
+          const previousOwnerMembership = this.memberships.get(previousOwnerMembershipKey);
+          if (previousOwnerMembership?.tenantRole === "OWNER") {
+            this.memberships.set(previousOwnerMembershipKey, {
+              ...previousOwnerMembership,
+              tenantRole: "USER",
+            });
+          }
+        }
       }
+
+      this.memberships.set(memberKey, {
+        guildId: guild.id,
+        userId: ownerUser.id,
+        tenantRole: "OWNER",
+        status: "ACTIVE",
+      });
+      ownerMembershipCreated = !existingMembership;
+      ownerDiscordUserId = input.ownerProfile.discordUserId;
+      this.guildOwnerDiscordUserIds.set(guild.discordGuildId, ownerDiscordUserId);
     }
 
     return {
       guild,
       guildCreated: !existingGuildId,
       ownerMembershipCreated,
+      ownerChanged: previousOwnerDiscordUserId !== ownerDiscordUserId,
+      previousOwnerDiscordUserId,
+      ownerDiscordUserId,
     };
   }
 
@@ -236,6 +251,30 @@ export class InMemoryRepository implements AppRepository {
     const membership = this.memberships.get(this.membershipKey(guild.id, userId));
     if (!membership || membership.status !== "ACTIVE") return null;
     return { guild, membership };
+  }
+
+  async upsertGuildMembership(
+    guildDiscordId: string,
+    userId: string,
+  ): Promise<{ guild: GuildRecord; membership: MembershipRecord; created: boolean } | null> {
+    const guildId = this.guildsByDiscordId.get(guildDiscordId);
+    if (!guildId) return null;
+    const guild = this.guilds.get(guildId);
+    const user = this.users.get(userId);
+    if (!guild || !user) return null;
+
+    const key = this.membershipKey(guild.id, userId);
+    const existing = this.memberships.get(key);
+    const membership: MembershipRecord = existing
+      ? { ...existing, status: "ACTIVE" }
+      : {
+          guildId: guild.id,
+          userId,
+          tenantRole: "USER",
+          status: "ACTIVE",
+        };
+    this.memberships.set(key, membership);
+    return { guild, membership, created: !existing };
   }
 
   async getMembershipByDiscordUser(guildDiscordId: string, discordUserId: string): Promise<MembershipRecord | null> {
@@ -398,6 +437,34 @@ export class InMemoryRepository implements AppRepository {
       });
 
     return paginate(items, limit, cursor);
+  }
+
+  async listGuildAdministrators(guildDiscordId: string): Promise<GuildMemberListItem[]> {
+    const guildId = this.guildsByDiscordId.get(guildDiscordId);
+    if (!guildId) throw new ApiError(404, "GUILD_NOT_FOUND", "Guild not found.");
+
+    return Array.from(this.memberships.values())
+      .filter(
+        (membership) =>
+          membership.guildId === guildId &&
+          membership.status === "ACTIVE" &&
+          (membership.tenantRole === "OWNER" || membership.tenantRole === "ADMIN"),
+      )
+      .map((membership) => {
+        const user = this.users.get(membership.userId);
+        if (!user) throw new ApiError(500, "DATA_CORRUPTION", "Missing user.");
+        return {
+          userId: membership.userId,
+          discordUserId: user.discordUserId,
+          username: user.username,
+          tenantRole: membership.tenantRole,
+          status: membership.status,
+        };
+      })
+      .sort((left, right) => {
+        if (left.tenantRole !== right.tenantRole) return left.tenantRole === "OWNER" ? -1 : 1;
+        return (left.username ?? left.discordUserId).localeCompare(right.username ?? right.discordUserId);
+      });
   }
 
   async updateGuildMemberRole(input: {

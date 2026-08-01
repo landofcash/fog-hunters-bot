@@ -35,9 +35,13 @@ export function createLoggerMock(): Logger {
 
 export function createApiClientMock(overrides: Record<string, unknown> = {}): ApiClient {
   return {
+    bootstrapGuild: vi.fn().mockResolvedValue(undefined),
     touchUser: vi.fn().mockResolvedValue(undefined),
     respondWithLlm: vi.fn().mockResolvedValue({ shouldRespond: false }),
     readGuildSettings: vi.fn(),
+    listGuildAdmins: vi.fn(),
+    addGuildAdmin: vi.fn(),
+    removeGuildAdmin: vi.fn(),
     readLlmGuildSettings: vi.fn(),
     patchLlmGuildSettings: vi.fn(),
     enableLlmChannel: vi.fn(),
@@ -89,6 +93,13 @@ export function createInteractionMock(overrides: Record<string, unknown> = {}): 
       getBoolean: vi.fn().mockReturnValue(null),
       getString: vi.fn().mockReturnValue(null),
       getInteger: vi.fn().mockReturnValue(30),
+      getUser: vi.fn().mockReturnValue({
+        id: "target-1",
+        username: "target",
+        globalName: "Target",
+        bot: false,
+        displayAvatarURL: vi.fn().mockReturnValue("https://avatar.test/target.png"),
+      }),
     },
     deferred: false,
     replied: false,

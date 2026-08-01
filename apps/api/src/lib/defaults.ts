@@ -39,6 +39,24 @@ export const DEFAULT_COMMAND_POLICIES: DefaultCommandPolicy[] = [
     denyChannels: [],
   },
   {
+    commandKey: "settings.admin.list",
+    minRole: "ADMIN",
+    allowChannels: [],
+    denyChannels: [],
+  },
+  {
+    commandKey: "settings.admin.add",
+    minRole: "OWNER",
+    allowChannels: [],
+    denyChannels: [],
+  },
+  {
+    commandKey: "settings.admin.remove",
+    minRole: "OWNER",
+    allowChannels: [],
+    denyChannels: [],
+  },
+  {
     commandKey: "ai.status",
     minRole: "ADMIN",
     allowChannels: [],

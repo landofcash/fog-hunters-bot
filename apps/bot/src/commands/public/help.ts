@@ -8,6 +8,7 @@ export async function handleHelpCommand(interaction: ChatInputCommandInteraction
       "- `/ping` public health check",
       "- `/help` command list",
       "- `/settings view` admin settings summary",
+      "- `/settings admin ...` owner-managed FHAIBot admins",
       "- `/ai ...` AI chat administration",
     ].join("\n"),
   });
