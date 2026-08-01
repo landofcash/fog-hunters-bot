@@ -35,9 +35,10 @@ describe("message create event", () => {
     const message = createMessageMock();
     await handleMessageCreateEvent({ message, apiClient, logger: createLoggerMock() });
     const channelSend = (message.channel as unknown as { send: ReturnType<typeof vi.fn> }).send;
-    expect(message.reply).toHaveBeenCalledWith({ content: "x".repeat(2_000) });
+    expect(message.reply).not.toHaveBeenCalled();
     expect(channelSend).toHaveBeenNthCalledWith(1, { content: "x".repeat(2_000) });
-    expect(channelSend).toHaveBeenNthCalledWith(2, { content: "x" });
+    expect(channelSend).toHaveBeenNthCalledWith(2, { content: "x".repeat(2_000) });
+    expect(channelSend).toHaveBeenNthCalledWith(3, { content: "x" });
   });
 
   it("silently logs expected denials and warns for unexpected failures", async () => {

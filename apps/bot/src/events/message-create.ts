@@ -57,10 +57,8 @@ export async function handleMessageCreateEvent(input: {
     }
 
     const chunks = splitForDiscord(response.replyText);
-    for (const [index, chunk] of chunks.entries()) {
-      if (index === 0) {
-        await message.reply({ content: chunk });
-      } else if ("send" in message.channel && typeof message.channel.send === "function") {
+    for (const chunk of chunks) {
+      if ("send" in message.channel && typeof message.channel.send === "function") {
         await message.channel.send({ content: chunk });
       }
     }
