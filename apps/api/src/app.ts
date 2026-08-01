@@ -1,6 +1,8 @@
 import cookie from "@fastify/cookie";
+import fastifyStatic from "@fastify/static";
 import Fastify, { type FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { ZodError } from "zod";
 import { loadConfig, type AppConfig } from "./lib/config";
 import { isApiError } from "./lib/errors";
@@ -11,6 +13,7 @@ import { registerHealthRoutes } from "./modules/health/health.routes";
 import { registerInternalRoutes } from "./modules/internal/internal.routes";
 import { JobsService } from "./modules/jobs/jobs.service";
 import { registerLlmRoutes } from "./modules/llm/llm.routes";
+import { registerPlatformRoutes } from "./modules/platform/platform.routes";
 import { registerMeRoutes } from "./modules/users/me.routes";
 import { registerRateLimit } from "./plugins/rate-limit";
 import { PrismaAppRepository } from "./repositories/prisma.repository";
@@ -86,7 +89,30 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(registerMeRoutes, { prefix: "/api/v1" });
   await app.register(registerGuildRoutes, { prefix: "/api/v1" });
   await app.register(registerLlmRoutes, { prefix: "/api/v1" });
+  await app.register(registerPlatformRoutes, { prefix: "/api/v1" });
   await app.register(registerInternalRoutes, { prefix: "/api/v1" });
+
+  if (appConfig.nodeEnv === "production") {
+    await app.register(fastifyStatic, {
+      root: path.resolve(__dirname, "../../admin/dist"),
+      wildcard: false,
+    });
+
+    app.setNotFoundHandler((request, reply) => {
+      const acceptsHtml = request.headers.accept?.includes("text/html") ?? false;
+      if (request.method === "GET" && acceptsHtml && !request.url.startsWith("/api/")) {
+        return reply.sendFile("index.html");
+      }
+
+      return reply.status(404).send({
+        error: {
+          code: "NOT_FOUND",
+          message: "Route not found.",
+          requestId: request.id,
+        },
+      });
+    });
+  }
 
   app.addHook("onReady", async () => {
     await jobs.start();

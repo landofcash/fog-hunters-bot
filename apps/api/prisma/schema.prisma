@@ -248,6 +248,7 @@ model LlmGuildSetting {
   id               String   @id(map: "pk_llm_guild_settings") @db.Uuid
   guildId          String   @unique(map: "ux_llm_guild_settings_guild_id") @map("guild_id") @db.Uuid
   enabled          Boolean  @default(false)
+  platformEnabled  Boolean  @default(true) @map("platform_enabled")
   defaultModel     String   @default("gpt-4.1-mini") @map("default_model")
   assistantPrompt  String?  @map("assistant_prompt")
   gatekeeperPrompt String?  @map("gatekeeper_prompt")

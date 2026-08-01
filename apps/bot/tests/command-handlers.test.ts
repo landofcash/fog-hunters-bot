@@ -303,42 +303,6 @@ describe("protected command handlers", () => {
     }
   });
 
-  it("updates the selected AI model", async () => {
-    const patch = vi.fn().mockResolvedValue({ settings: { defaultModel: "gpt-5.6-terra" } });
-    const apiClient = createApiClientMock({ patchLlmGuildSettings: patch });
-    const interaction = aiInteraction("model", {
-      getString: vi.fn((name: string) => name === "name" ? "gpt-5.6-terra" : null),
-    });
-
-    await handleAiCommand(apiClient, interaction);
-
-    expect(patch).toHaveBeenCalledWith({
-      guildId: "guild-1",
-      actorDiscordUserId: "user-1",
-      channelId: "channel-1",
-      commandKey: "ai.model",
-      patch: { defaultModel: "gpt-5.6-terra" },
-    });
-    expect(interaction.reply).toHaveBeenCalledWith(expect.objectContaining({
-      content: "Set this server's AI model to **gpt-5.6-terra**.",
-    }));
-  });
-
-  it("rejects AI models outside the Discord choice list", async () => {
-    const patch = vi.fn();
-    const apiClient = createApiClientMock({ patchLlmGuildSettings: patch });
-    const interaction = aiInteraction("model", {
-      getString: vi.fn((name: string) => name === "name" ? "unknown-model" : null),
-    });
-
-    await handleAiCommand(apiClient, interaction);
-
-    expect(patch).not.toHaveBeenCalled();
-    expect(interaction.reply).toHaveBeenCalledWith(expect.objectContaining({
-      content: "Unsupported AI model selection.",
-    }));
-  });
-
   it("renders permission details and generic failures", async () => {
     const denied = aiInteraction("enable");
     await handleAiCommand(createApiClientMock({

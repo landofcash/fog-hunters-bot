@@ -29,6 +29,24 @@ describe("role enforcement", () => {
     expect(response.body.error.code).toBe("INSUFFICIENT_ROLE");
   });
 
+  it("keeps administrator role changes owner-only", async () => {
+    const { app, repo } = await createTestApp();
+    closeApp = () => app.close();
+    const guild = repo.seedGuild("guild-role-admin", "Guild Role Admin");
+    const admin = await createAuthenticatedAgent(app, "discord_actor_admin");
+    const target = await createAuthenticatedAgent(app, "discord_target_admin");
+    repo.seedMembership({ guildId: guild.id, userId: admin.userId, tenantRole: "ADMIN" });
+    repo.seedMembership({ guildId: guild.id, userId: target.userId, tenantRole: "USER" });
+
+    const response = await admin.agent
+      .put(`/api/v1/guilds/${guild.discordGuildId}/roles/${target.userId}`)
+      .set("x-csrf-token", admin.csrfToken)
+      .send({ tenantRole: "ADMIN" });
+
+    expect(response.status).toBe(403);
+    expect(response.body.error.code).toBe("INSUFFICIENT_ROLE");
+  });
+
   it("prevents demoting the last owner", async () => {
     const { app, repo } = await createTestApp();
     closeApp = () => app.close();

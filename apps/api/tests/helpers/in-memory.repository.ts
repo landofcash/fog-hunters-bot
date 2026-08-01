@@ -20,6 +20,7 @@ import type {
   LlmMessageRecord,
   LlmModerationEventRecord,
   MembershipRecord,
+  PlatformGuildListItem,
   SessionRecord,
   UserRecord,
 } from "../../src/repositories/types";
@@ -296,6 +297,39 @@ export class InMemoryRepository implements AppRepository {
     commands.sort((a, b) => a.commandKey.localeCompare(b.commandKey));
 
     return { guild, features, commands };
+  }
+
+  async listPlatformGuilds(input: {
+    limit: number;
+    cursor?: string;
+    search?: string;
+  }): Promise<CursorPage<PlatformGuildListItem>> {
+    const search = input.search?.trim().toLowerCase();
+    const items = Array.from(this.guilds.values())
+      .filter((guild) => !search
+        || guild.name.toLowerCase().includes(search)
+        || guild.discordGuildId.toLowerCase().includes(search))
+      .map((guild) => {
+        const settings = this.llmGuildSettings.get(guild.id);
+        const guildAiEnabled = settings?.enabled ?? false;
+        const platformAiEnabled = settings?.platformEnabled ?? true;
+        return {
+          guildId: guild.discordGuildId,
+          guildName: guild.name,
+          status: "ACTIVE" as const,
+          ownerDiscordUserId: this.guildOwnerDiscordUserIds.get(guild.discordGuildId) ?? null,
+          memberCount: Array.from(this.memberships.values()).filter(
+            (membership) => membership.guildId === guild.id && membership.status === "ACTIVE",
+          ).length,
+          guildAiEnabled,
+          platformAiEnabled,
+          effectiveAiEnabled: guildAiEnabled && platformAiEnabled,
+          defaultModel: settings?.defaultModel ?? "gpt-4.1-mini",
+          updatedAt: settings?.updatedAt ?? new Date(0),
+        };
+      })
+      .sort((left, right) => left.guildName.localeCompare(right.guildName));
+    return paginate(items, input.limit, input.cursor);
   }
 
   async getCommandPermission(guildDiscordId: string, commandKey: string): Promise<CommandPermissionRecord | null> {
@@ -648,6 +682,7 @@ export class InMemoryRepository implements AppRepository {
       id: generateId(),
       guildId: guild.id,
       enabled: false,
+      platformEnabled: true,
       defaultModel: "gpt-4.1-mini",
       assistantPrompt: null,
       gatekeeperPrompt: null,
@@ -665,6 +700,7 @@ export class InMemoryRepository implements AppRepository {
   async updateLlmGuildSettings(input: {
     guildDiscordId: string;
     enabled?: boolean;
+    platformEnabled?: boolean;
     defaultModel?: string;
     assistantPrompt?: string | null;
     gatekeeperPrompt?: string | null;
@@ -677,6 +713,7 @@ export class InMemoryRepository implements AppRepository {
     const updated: LlmGuildSettingsRecord = {
       ...settings,
       enabled: input.enabled ?? settings.enabled,
+      platformEnabled: input.platformEnabled ?? settings.platformEnabled,
       defaultModel: input.defaultModel ?? settings.defaultModel,
       assistantPrompt: input.assistantPrompt === undefined ? settings.assistantPrompt : input.assistantPrompt,
       gatekeeperPrompt: input.gatekeeperPrompt === undefined ? settings.gatekeeperPrompt : input.gatekeeperPrompt,
@@ -696,6 +733,19 @@ export class InMemoryRepository implements AppRepository {
       return null;
     }
     return this.llmChannelSettings.get(this.llmChannelKey(guild.id, channelId)) ?? null;
+  }
+
+  async listLlmChannelSettings(guildDiscordId: string): Promise<LlmChannelSettingsRecord[]> {
+    const guild = await this.getGuildByDiscordId(guildDiscordId);
+    if (!guild) {
+      throw new ApiError(404, "GUILD_NOT_FOUND", "Guild not found.");
+    }
+    return Array.from(this.llmChannelSettings.values())
+      .filter((channel) => channel.guildId === guild.id)
+      .sort((left, right) => {
+        if (left.enabled !== right.enabled) return left.enabled ? -1 : 1;
+        return left.discordChannelId.localeCompare(right.discordChannelId);
+      });
   }
 
   async upsertLlmChannelSettings(input: {

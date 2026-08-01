@@ -304,6 +304,13 @@ export class LlmService {
       guildSettings = guildSettingsResult.settings;
       guildInternalId = guildSettingsResult.guild.id;
 
+      if (!guildSettings.platformEnabled) {
+        return {
+          shouldRespond: false,
+          reason: "LLM_DISABLED_BY_PLATFORM",
+        };
+      }
+
       if (!guildSettings.enabled) {
         return {
           shouldRespond: false,

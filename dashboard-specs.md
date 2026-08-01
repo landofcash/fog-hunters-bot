@@ -1,4 +1,7 @@
-# Dashboard Specs (Next.js + React)
+# Dashboard Specs
+
+> Superseded by [Administration Dashboard Plan](./ADMIN_DASHBOARD_PLAN.md).
+> This file is retained only as the original dashboard design reference.
 
 ## 1) Purpose
 This document defines the frontend dashboard implementation for the multi-tenant Discord bot platform.

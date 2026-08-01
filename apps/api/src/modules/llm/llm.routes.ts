@@ -6,6 +6,7 @@ import { requireAuth } from "../../middleware/auth";
 import { requireCsrf } from "../../middleware/csrf";
 import { requireGuildScope } from "../../middleware/guild-scope";
 import { requireRole } from "../../middleware/require-role";
+import { isSupportedLlmModel } from "./models";
 import { getEffectivePrompts } from "./prompts";
 import { sanitizeLlmSettingsForAudit } from "./settings-audit";
 
@@ -21,6 +22,16 @@ function actorTypeForRequest(request: FastifyRequest): "USER" | "PLATFORM_ADMIN"
   return request.auth?.platformRole === "PLATFORM_ADMIN" ? "PLATFORM_ADMIN" : "USER";
 }
 
+function effectiveAiEnabled(app: FastifyInstance, settings: {
+  enabled: boolean;
+  platformEnabled: boolean;
+}): boolean {
+  return app.appConfig.llmEnabled
+    && !app.appConfig.llmGlobalKillSwitch
+    && settings.platformEnabled
+    && settings.enabled;
+}
+
 export async function registerLlmRoutes(app: FastifyInstance): Promise<void> {
   const llmPlugin = async (llmApp: FastifyInstance): Promise<void> => {
     llmApp.addHook("preHandler", requireAuth);
@@ -34,8 +45,11 @@ export async function registerLlmRoutes(app: FastifyInstance): Promise<void> {
       async (request) => {
         const params = guildParamsSchema.parse(request.params);
         const result = await llmApp.repository.getOrCreateLlmGuildSettings(params.guildId);
+        const channels = await llmApp.repository.listLlmChannelSettings(params.guildId);
         return {
           ...result,
+          effectiveAiEnabled: effectiveAiEnabled(llmApp, result.settings),
+          channels,
           effectivePrompts: getEffectivePrompts(result.settings),
         };
       },
@@ -54,11 +68,23 @@ export async function registerLlmRoutes(app: FastifyInstance): Promise<void> {
         if (!auth || !guildContext) {
           throw new ApiError(401, "UNAUTHENTICATED", "Authentication required.");
         }
+        const updatesPlatformPolicy = body.defaultModel !== undefined || body.platformEnabled !== undefined;
+        if (updatesPlatformPolicy && auth.platformRole !== "PLATFORM_ADMIN") {
+          throw new ApiError(
+            403,
+            "PLATFORM_ADMIN_REQUIRED",
+            "Only a platform administrator can change the assigned model or platform AI access.",
+          );
+        }
+        if (body.defaultModel && !isSupportedLlmModel(body.defaultModel)) {
+          throw new ApiError(400, "LLM_MODEL_NOT_SUPPORTED", "Unsupported AI model.");
+        }
 
         const before = await llmApp.repository.getOrCreateLlmGuildSettings(params.guildId);
         const updated = await llmApp.repository.updateLlmGuildSettings({
           guildDiscordId: params.guildId,
           enabled: body.enabled,
+          platformEnabled: body.platformEnabled,
           defaultModel: body.defaultModel,
           assistantPrompt: body.assistantPrompt,
           gatekeeperPrompt: body.gatekeeperPrompt,
@@ -81,6 +107,7 @@ export async function registerLlmRoutes(app: FastifyInstance): Promise<void> {
 
         return {
           settings: updated.settings,
+          effectiveAiEnabled: effectiveAiEnabled(llmApp, updated.settings),
           effectivePrompts: getEffectivePrompts(updated.settings),
           auditLogId: audit.id,
         };

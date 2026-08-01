@@ -368,6 +368,22 @@ describe("internal bot integration routes", () => {
     expect(settings.statusCode).toBe(200);
     expect(settings.json().settings.enabled).toBe(false);
 
+    const modelDenied = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/internal/guilds/guild-llm/llm/settings",
+      headers: {
+        "x-internal-key": "test_internal_api_key",
+      },
+      payload: {
+        actorDiscordUserId: "discord_owner_llm",
+        commandKey: "ai.prompt.set",
+        defaultModel: "gpt-5.6-terra",
+      },
+    });
+
+    expect(modelDenied.statusCode).toBe(403);
+    expect(modelDenied.json().error.code).toBe("PLATFORM_ADMIN_REQUIRED");
+
     const disabledResponse = await app.inject({
       method: "POST",
       url: "/api/v1/internal/llm/respond",

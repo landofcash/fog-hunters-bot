@@ -9,6 +9,7 @@ export const llmPromptOverrideSchema = z
 export const llmGuildSettingsPatchBodySchema = z
   .object({
     enabled: z.boolean().optional(),
+    platformEnabled: z.boolean().optional(),
     defaultModel: z.string().min(1).optional(),
     assistantPrompt: llmPromptOverrideSchema.optional(),
     gatekeeperPrompt: llmPromptOverrideSchema.optional(),

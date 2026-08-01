@@ -93,6 +93,19 @@ export interface GuildMemberListItem {
   status: MemberStatus;
 }
 
+export interface PlatformGuildListItem {
+  guildId: string;
+  guildName: string;
+  status: "ACTIVE" | "DISABLED" | "LEFT";
+  ownerDiscordUserId?: string | null;
+  memberCount: number;
+  guildAiEnabled: boolean;
+  platformAiEnabled: boolean;
+  effectiveAiEnabled: boolean;
+  defaultModel: string;
+  updatedAt: Date;
+}
+
 export interface AuditLogRecord {
   id: string;
   guildId: string;
@@ -134,6 +147,7 @@ export interface LlmGuildSettingsRecord {
   id: string;
   guildId: string;
   enabled: boolean;
+  platformEnabled: boolean;
   defaultModel: string;
   assistantPrompt?: string | null;
   gatekeeperPrompt?: string | null;
@@ -247,6 +261,11 @@ export interface AppRepository {
     defaultMinRole: TenantRole;
   }): Promise<CommandAccessResult>;
   getGuildSettings(guildDiscordId: string): Promise<GuildSettingsRecord | null>;
+  listPlatformGuilds(input: {
+    limit: number;
+    cursor?: string;
+    search?: string;
+  }): Promise<CursorPage<PlatformGuildListItem>>;
   upsertFeatureFlag(input: {
     guildDiscordId: string;
     featureKey: string;
@@ -321,6 +340,7 @@ export interface AppRepository {
   updateLlmGuildSettings(input: {
     guildDiscordId: string;
     enabled?: boolean;
+    platformEnabled?: boolean;
     defaultModel?: string;
     assistantPrompt?: string | null;
     gatekeeperPrompt?: string | null;
@@ -330,6 +350,7 @@ export interface AppRepository {
     maxOutputTokens?: number;
   }): Promise<{ guild: GuildRecord; settings: LlmGuildSettingsRecord }>;
   getLlmChannelSettings(guildDiscordId: string, channelId: string): Promise<LlmChannelSettingsRecord | null>;
+  listLlmChannelSettings(guildDiscordId: string): Promise<LlmChannelSettingsRecord[]>;
   upsertLlmChannelSettings(input: {
     guildDiscordId: string;
     channelId: string;

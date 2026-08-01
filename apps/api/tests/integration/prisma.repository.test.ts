@@ -169,6 +169,36 @@ describe("PrismaAppRepository integration", () => {
     expect([...first.items, ...second.items].map((member) => member.discordUserId)).not.toContain("owner-other");
   });
 
+  it("persists platform AI policy and exposes it in the platform guild directory", async () => {
+    await bootstrapGuild("guild-platform-policy", "owner-platform-policy");
+
+    const updated = await repository.updateLlmGuildSettings({
+      guildDiscordId: "guild-platform-policy",
+      enabled: true,
+      platformEnabled: false,
+      defaultModel: "gpt-5.6-terra",
+    });
+    expect(updated.settings).toMatchObject({
+      enabled: true,
+      platformEnabled: false,
+      defaultModel: "gpt-5.6-terra",
+    });
+
+    const directory = await repository.listPlatformGuilds({
+      limit: 10,
+      search: "platform-policy",
+    });
+    expect(directory.items).toEqual([
+      expect.objectContaining({
+        guildId: "guild-platform-policy",
+        guildAiEnabled: true,
+        platformAiEnabled: false,
+        effectiveAiEnabled: false,
+        defaultModel: "gpt-5.6-terra",
+      }),
+    ]);
+  });
+
   it("creates selected guild memberships and lists only active administrators", async () => {
     await bootstrapGuild("guild-admins", "owner-admins");
     const target = await repository.upsertUserFromDiscord({

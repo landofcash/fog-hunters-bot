@@ -15,6 +15,7 @@ import {
 import { ApiError } from "../../lib/errors";
 import { requireInternalApiKey } from "../../middleware/internal-auth";
 import { LlmService } from "../llm/llm.service";
+import { isSupportedLlmModel } from "../llm/models";
 import { getEffectivePrompts } from "../llm/prompts";
 import { sanitizeLlmSettingsForAudit } from "../llm/settings-audit";
 
@@ -333,6 +334,11 @@ export async function registerInternalRoutes(app: FastifyInstance): Promise<void
       const result = await internalApp.repository.getOrCreateLlmGuildSettings(params.guildId);
       return {
         ...result,
+        effectiveAiEnabled:
+          internalApp.appConfig.llmEnabled
+          && !internalApp.appConfig.llmGlobalKillSwitch
+          && result.settings.platformEnabled
+          && result.settings.enabled,
         effectivePrompts: getEffectivePrompts(result.settings),
       };
     });
@@ -347,6 +353,21 @@ export async function registerInternalRoutes(app: FastifyInstance): Promise<void
         channelId: body.channelId,
         commandKey: body.commandKey,
       });
+      if (body.defaultModel !== undefined) {
+        const actor = access.actorUserId
+          ? await internalApp.repository.getUserById(access.actorUserId)
+          : null;
+        if (actor?.platformRole !== "PLATFORM_ADMIN") {
+          throw new ApiError(
+            403,
+            "PLATFORM_ADMIN_REQUIRED",
+            "Only a platform administrator can change the assigned model.",
+          );
+        }
+        if (!isSupportedLlmModel(body.defaultModel)) {
+          throw new ApiError(400, "LLM_MODEL_NOT_SUPPORTED", "Unsupported AI model.");
+        }
+      }
 
       const before = await internalApp.repository.getOrCreateLlmGuildSettings(params.guildId);
       const assistantPrompt = body.assistantPrompt !== undefined

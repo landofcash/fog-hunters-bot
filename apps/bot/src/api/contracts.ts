@@ -117,6 +117,7 @@ export interface LlmGuildSettingsEnvelope {
     id: string;
     guildId: string;
     enabled: boolean;
+    platformEnabled: boolean;
     defaultModel: string;
     assistantPrompt?: string | null;
     gatekeeperPrompt?: string | null;
@@ -140,5 +141,6 @@ export interface InternalLlmSettingsResponse {
     name: string;
   };
   settings: LlmGuildSettingsEnvelope["settings"];
+  effectiveAiEnabled: boolean;
   effectivePrompts: LlmGuildSettingsEnvelope["effectivePrompts"];
 }

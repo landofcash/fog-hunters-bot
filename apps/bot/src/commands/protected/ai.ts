@@ -1,7 +1,6 @@
 import { MessageFlags, type ChatInputCommandInteraction } from "discord.js";
 import type { ApiClient } from "../../api/client";
 import { ApiClientError } from "../../runtime/errors";
-import { isSupportedAiModel } from "./ai-models";
 
 interface AccessDeniedDetails {
   reason?: string;
@@ -72,7 +71,9 @@ async function handleStatus(apiClient: ApiClient, interaction: ChatInputCommandI
 
   const lines = [
     `Guild: **${result.guild.name}**`,
-    `AI enabled: **${result.settings.enabled ? "yes" : "no"}**`,
+    `AI enabled: **${result.effectiveAiEnabled ? "yes" : "no"}**`,
+    `Guild preference: **${result.settings.enabled ? "enabled" : "disabled"}**`,
+    `Platform access: **${result.settings.platformEnabled ? "enabled" : "suspended"}**`,
     `Model: **${result.settings.defaultModel}**`,
     `Retention: **${result.settings.retentionDays} days**`,
     `DM enabled: **${result.settings.dmEnabled ? "yes" : "no"}**`,
@@ -107,41 +108,6 @@ async function handleEnable(apiClient: ApiClient, interaction: ChatInputCommandI
   await interaction.reply({
     flags: MessageFlags.Ephemeral,
     content: `Enabled AI responses for <#${channel.id}>${mentionOnly ? " (mention-only mode)." : "."}`,
-  });
-}
-
-async function handleModel(apiClient: ApiClient, interaction: ChatInputCommandInteraction): Promise<void> {
-  const guildId = interaction.guildId;
-  if (!guildId) {
-    await interaction.reply({
-      flags: MessageFlags.Ephemeral,
-      content: "`/ai model` can only be used in servers.",
-    });
-    return;
-  }
-
-  const model = interaction.options.getString("name", true);
-  if (!isSupportedAiModel(model)) {
-    await interaction.reply({
-      flags: MessageFlags.Ephemeral,
-      content: "Unsupported AI model selection.",
-    });
-    return;
-  }
-
-  const updated = await apiClient.patchLlmGuildSettings({
-    guildId,
-    actorDiscordUserId: interaction.user.id,
-    channelId: interaction.channelId ?? undefined,
-    commandKey: "ai.model",
-    patch: {
-      defaultModel: model,
-    },
-  });
-
-  await interaction.reply({
-    flags: MessageFlags.Ephemeral,
-    content: `Set this server's AI model to **${updated.settings.defaultModel}**.`,
   });
 }
 
@@ -394,9 +360,6 @@ export async function handleAiCommand(apiClient: ApiClient, interaction: ChatInp
     switch (sub) {
       case "status":
         await handleStatus(apiClient, interaction);
-        return;
-      case "model":
-        await handleModel(apiClient, interaction);
         return;
       case "enable":
         await handleEnable(apiClient, interaction);

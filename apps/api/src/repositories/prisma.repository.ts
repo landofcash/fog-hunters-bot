@@ -32,6 +32,7 @@ import type {
   LlmMessageRecord,
   LlmModerationEventRecord,
   MembershipRecord,
+  PlatformGuildListItem,
   SessionRecord,
   UserRecord,
 } from "./types";
@@ -75,6 +76,7 @@ function mapLlmGuildSettings(record: {
   id: string;
   guildId: string;
   enabled: boolean;
+  platformEnabled: boolean;
   defaultModel: string;
   assistantPrompt?: string | null;
   gatekeeperPrompt?: string | null;
@@ -89,6 +91,7 @@ function mapLlmGuildSettings(record: {
     id: record.id,
     guildId: record.guildId,
     enabled: record.enabled,
+    platformEnabled: record.platformEnabled,
     defaultModel: record.defaultModel,
     assistantPrompt: record.assistantPrompt ?? null,
     gatekeeperPrompt: record.gatekeeperPrompt ?? null,
@@ -823,6 +826,54 @@ export class PrismaAppRepository extends TenantRepositoryBase implements AppRepo
     };
   }
 
+  async listPlatformGuilds(input: {
+    limit: number;
+    cursor?: string;
+    search?: string;
+  }): Promise<CursorPage<PlatformGuildListItem>> {
+    const offset = decodeOffsetCursor(input.cursor);
+    const search = input.search?.trim();
+    const rows = await this.prisma.guild.findMany({
+      where: search
+        ? {
+            OR: [
+              { name: { contains: search, mode: "insensitive" } },
+              { discordGuildId: { contains: search } },
+            ],
+          }
+        : undefined,
+      include: {
+        _count: { select: { members: true } },
+        llmSetting: true,
+      },
+      orderBy: [{ name: "asc" }, { id: "asc" }],
+      skip: offset,
+      take: input.limit + 1,
+    });
+    const hasMore = rows.length > input.limit;
+    const page = hasMore ? rows.slice(0, input.limit) : rows;
+
+    return {
+      items: page.map((row: any) => {
+        const llmEnabled = row.llmSetting?.enabled ?? false;
+        const platformEnabled = row.llmSetting?.platformEnabled ?? true;
+        return {
+          guildId: row.discordGuildId,
+          guildName: row.name,
+          status: row.status,
+          ownerDiscordUserId: row.ownerDiscordUserId,
+          memberCount: row._count.members,
+          guildAiEnabled: llmEnabled,
+          platformAiEnabled: platformEnabled,
+          effectiveAiEnabled: llmEnabled && platformEnabled,
+          defaultModel: row.llmSetting?.defaultModel ?? "gpt-4.1-mini",
+          updatedAt: row.updatedAt,
+        };
+      }),
+      nextCursor: hasMore ? encodeOffsetCursor(offset + input.limit) : undefined,
+    };
+  }
+
   async listGuildAdministrators(guildDiscordId: string): Promise<GuildMemberListItem[]> {
     const guildId = await this.resolveGuildId(guildDiscordId);
     const rows = await this.prisma.guildMember.findMany({
@@ -1179,6 +1230,7 @@ export class PrismaAppRepository extends TenantRepositoryBase implements AppRepo
   async updateLlmGuildSettings(input: {
     guildDiscordId: string;
     enabled?: boolean;
+    platformEnabled?: boolean;
     defaultModel?: string;
     assistantPrompt?: string | null;
     gatekeeperPrompt?: string | null;
@@ -1192,6 +1244,7 @@ export class PrismaAppRepository extends TenantRepositoryBase implements AppRepo
       where: { guildId: guild.id },
       data: {
         enabled: input.enabled,
+        platformEnabled: input.platformEnabled,
         defaultModel: input.defaultModel,
         assistantPrompt: input.assistantPrompt === undefined ? undefined : input.assistantPrompt,
         gatekeeperPrompt: input.gatekeeperPrompt === undefined ? undefined : input.gatekeeperPrompt,
@@ -1222,6 +1275,18 @@ export class PrismaAppRepository extends TenantRepositoryBase implements AppRepo
       },
     });
     return row ? mapLlmChannelSettings(row) : null;
+  }
+
+  async listLlmChannelSettings(guildDiscordId: string): Promise<LlmChannelSettingsRecord[]> {
+    const guild = await this.getGuildByDiscordId(guildDiscordId);
+    if (!guild) {
+      throw new ApiError(404, "GUILD_NOT_FOUND", "Guild not found.");
+    }
+    const rows = await this.prisma.llmChannelSetting.findMany({
+      where: { guildId: guild.id },
+      orderBy: [{ enabled: "desc" }, { discordChannelId: "asc" }],
+    });
+    return rows.map(mapLlmChannelSettings);
   }
 
   async upsertLlmChannelSettings(input: {

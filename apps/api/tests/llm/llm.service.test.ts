@@ -17,6 +17,7 @@ async function createLlmFixture(options: { channelEnabled?: boolean; mentionOnly
     id: "llm-settings-id",
     guildId: guild.id,
     enabled: true,
+    platformEnabled: true,
     defaultModel: "test-model",
     retentionDays: 90,
     dmEnabled: true,
@@ -115,6 +116,7 @@ describe("LlmService", () => {
         id: "llm-settings-b",
         guildId: guildB.id,
         enabled: true,
+        platformEnabled: true,
         defaultModel: "test-model",
         assistantPrompt: "Assistant prompt B",
         gatekeeperPrompt: "Gatekeeper rules B",
@@ -329,6 +331,26 @@ describe("LlmService", () => {
           channelId: "channel-1",
         },
       });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("does not call the provider when platform AI access is suspended", async () => {
+    const { app, repo, config, guild } = await createLlmFixture();
+    try {
+      repo.llmGuildSettings.set(guild.id, {
+        ...repo.llmGuildSettings.get(guild.id)!,
+        platformEnabled: false,
+      });
+      const provider: LlmProvider = { generateChat: vi.fn() };
+      const service = new LlmService(config, repo, app.log, provider);
+
+      await expect(service.respondToMessage(messageInput())).resolves.toMatchObject({
+        shouldRespond: false,
+        reason: "LLM_DISABLED_BY_PLATFORM",
+      });
+      expect(provider.generateChat).not.toHaveBeenCalled();
     } finally {
       await app.close();
     }

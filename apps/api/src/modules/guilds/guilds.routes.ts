@@ -147,7 +147,7 @@ export async function registerGuildRoutes(app: FastifyInstance): Promise<void> {
     guildApp.put(
       "/:guildId/roles/:userId",
       {
-        preHandler: [requireCsrf, requireRole("ADMIN")],
+        preHandler: [requireCsrf, requireRole("OWNER")],
       },
       async (request) => {
         const params = memberParamsSchema.parse(request.params);
@@ -156,11 +156,6 @@ export async function registerGuildRoutes(app: FastifyInstance): Promise<void> {
         const guildContext = request.guildContext;
         if (!auth || !guildContext) {
           throw new ApiError(401, "UNAUTHENTICATED", "Authentication required.");
-        }
-
-        const actorRole = guildContext.membership.tenantRole;
-        if (body.tenantRole === "OWNER" && actorRole !== "OWNER" && auth.platformRole !== "PLATFORM_ADMIN") {
-          throw new ApiError(403, "OWNER_ASSIGN_FORBIDDEN", "Only OWNER can assign OWNER role.");
         }
 
         const update = await guildApp.repository.updateGuildMemberRole({
