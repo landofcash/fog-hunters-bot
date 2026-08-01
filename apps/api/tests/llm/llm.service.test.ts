@@ -1,5 +1,6 @@
 import type { FastifyBaseLogger } from "fastify";
 import { describe, expect, it, vi } from "vitest";
+import type { AlertNotifier } from "../../src/lib/alerts";
 import { ApiError } from "../../src/lib/errors";
 import { buildMessages, LlmService } from "../../src/modules/llm/llm.service";
 import {
@@ -304,7 +305,10 @@ describe("LlmService", () => {
           usage: { inputTokens: 1, outputTokens: 1 },
         })
         .mockRejectedValueOnce(new ApiError(504, "LLM_TIMEOUT", "Timed out"));
-      const service = new LlmService(config, repo, app.log, { generateChat });
+      const alerts: AlertNotifier = {
+        notify: vi.fn().mockResolvedValue(true),
+      };
+      const service = new LlmService(config, repo, app.log, { generateChat }, alerts);
 
       await expect(service.respondToMessage(messageInput())).resolves.toMatchObject({
         shouldRespond: false,
@@ -312,6 +316,48 @@ describe("LlmService", () => {
       });
       expect(repo.llmGenerations[0]).toMatchObject({ status: "FAILED", errorCode: "LLM_TIMEOUT" });
       expect(repo.llmModerationEvents[0]).toMatchObject({ category: "generation_error" });
+      expect(alerts.notify).toHaveBeenCalledWith({
+        event: "api.openai.failure",
+        title: "OpenAI request failed",
+        severity: "error",
+        details: {
+          phase: "generation",
+          model: "test-model",
+          code: "LLM_TIMEOUT",
+          statusCode: 504,
+          guildId: "guild-llm-prompt",
+          channelId: "channel-1",
+        },
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("alerts when the OpenAI gatekeeper call fails without persisting message content", async () => {
+    const { app, repo, config } = await createLlmFixture();
+    try {
+      const alerts: AlertNotifier = {
+        notify: vi.fn().mockResolvedValue(true),
+      };
+      const generateChat = vi.fn<LlmProvider["generateChat"]>()
+        .mockRejectedValue(new ApiError(502, "LLM_PROVIDER_ERROR", "Provider unavailable"));
+      const service = new LlmService(config, repo, app.log, { generateChat }, alerts);
+
+      await expect(service.respondToMessage(messageInput())).rejects.toMatchObject({
+        code: "LLM_PROVIDER_ERROR",
+      });
+      expect(alerts.notify).toHaveBeenCalledWith(expect.objectContaining({
+        event: "api.openai.failure",
+        details: expect.objectContaining({
+          phase: "gatekeeper",
+          model: "test-model",
+          guildId: "guild-llm-prompt",
+          channelId: "channel-1",
+        }),
+      }));
+      expect(JSON.stringify(vi.mocked(alerts.notify).mock.calls)).not.toContain("What is the answer?");
+      expect(repo.llmMessages).toHaveLength(0);
     } finally {
       await app.close();
     }

@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+const optionalUrl = z.preprocess(
+  (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
+  z.string().url().optional(),
+);
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   HOST: z.string().default("0.0.0.0"),
@@ -38,6 +43,9 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform((v) => v === "true"),
+  ALERT_DISCORD_WEBHOOK_URL: optionalUrl,
+  ALERT_COOLDOWN_MS: z.coerce.number().int().nonnegative().default(300_000),
+  ALERT_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(3_000),
 });
 
 export interface AppConfig {
@@ -66,6 +74,9 @@ export interface AppConfig {
   llmMaxOutputTokens: number;
   llmRequestTimeoutMs: number;
   llmGlobalKillSwitch: boolean;
+  alertDiscordWebhookUrl?: string;
+  alertCooldownMs: number;
+  alertRequestTimeoutMs: number;
 }
 
 export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
@@ -101,5 +112,8 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     llmMaxOutputTokens: parsed.LLM_MAX_OUTPUT_TOKENS,
     llmRequestTimeoutMs: parsed.LLM_REQUEST_TIMEOUT_MS,
     llmGlobalKillSwitch: parsed.LLM_GLOBAL_KILL_SWITCH ?? false,
+    alertDiscordWebhookUrl: parsed.ALERT_DISCORD_WEBHOOK_URL,
+    alertCooldownMs: parsed.ALERT_COOLDOWN_MS,
+    alertRequestTimeoutMs: parsed.ALERT_REQUEST_TIMEOUT_MS,
   };
 }

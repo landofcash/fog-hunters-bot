@@ -16,12 +16,16 @@ export function createBotConfig(overrides: Partial<BotConfig> = {}): BotConfig {
     httpTimeoutMs: 100,
     httpRetryMax: 2,
     commandSyncOnStart: false,
+    alertDiscordWebhookUrl: undefined,
+    alertCooldownMs: 300_000,
+    alertRequestTimeoutMs: 3_000,
     ...overrides,
   };
 }
 
 export function createLoggerMock(): Logger {
   return {
+    fatal: vi.fn(),
     debug: vi.fn(),
     info: vi.fn(),
     warn: vi.fn(),

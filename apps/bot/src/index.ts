@@ -8,12 +8,29 @@ import { handleInteractionCreateEvent } from "./events/interaction-create";
 import { handleMessageCreateEvent } from "./events/message-create";
 import { handleReadyEvent } from "./events/ready";
 import { createLogger } from "./logger";
+import { DiscordWebhookAlertNotifier } from "./runtime/alerts";
+import { registerDiscordLifecycleAlerts } from "./runtime/discord-lifecycle";
 
 async function main(): Promise<void> {
   const config = loadConfig();
   const logger = createLogger(config);
   const apiClient = new ApiClient(config, logger);
   const client = createDiscordClient();
+  const alerts = new DiscordWebhookAlertNotifier(
+    config.alertDiscordWebhookUrl,
+    "fhaibot-bot",
+    logger,
+    config.alertCooldownMs,
+    config.alertRequestTimeoutMs,
+  );
+  let shuttingDown = false;
+
+  registerDiscordLifecycleAlerts({
+    client,
+    alerts,
+    logger,
+    isShuttingDown: () => shuttingDown,
+  });
 
   client.once(Events.ClientReady, async (readyClient) => {
     await handleReadyEvent({
@@ -56,6 +73,7 @@ async function main(): Promise<void> {
   await client.login(config.discordBotToken);
 
   const shutdown = async (): Promise<void> => {
+    shuttingDown = true;
     logger.info("Shutting down Discord bot");
     client.destroy();
     process.exit(0);

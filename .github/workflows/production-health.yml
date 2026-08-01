@@ -1,0 +1,82 @@
+name: Production health
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: production-health
+  cancel-in-progress: true
+
+jobs:
+  api-health:
+    name: API health
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Check production API
+        id: health
+        continue-on-error: true
+        env:
+          HEALTH_URL: ${{ vars.PRODUCTION_API_HEALTH_URL || 'https://api-production-8fae.up.railway.app/api/v1/health' }}
+        run: |
+          if [ -z "$HEALTH_URL" ]; then
+            echo "PRODUCTION_API_HEALTH_URL is not configured."
+            exit 1
+          fi
+
+          response="$(curl --silent --show-error --fail \
+            --connect-timeout 5 \
+            --max-time 15 \
+            --retry 2 \
+            --retry-all-errors \
+            "$HEALTH_URL")"
+
+          status="$(jq -r '.status // empty' <<<"$response")"
+          if [ "$status" != "ok" ]; then
+            echo "Health endpoint did not return status=ok."
+            exit 1
+          fi
+
+      - name: Reconcile API health alert
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEALTH_OUTCOME: ${{ steps.health.outcome }}
+          HEALTH_URL: ${{ vars.PRODUCTION_API_HEALTH_URL || 'https://api-production-8fae.up.railway.app/api/v1/health' }}
+          ALERT_TITLE: "[alert] Production API health check failed"
+        run: |
+          issue_number="$(gh issue list \
+            --repo "$GITHUB_REPOSITORY" \
+            --state open \
+            --search "\"$ALERT_TITLE\" in:title" \
+            --json number,title \
+            --jq ".[] | select(.title == \"$ALERT_TITLE\") | .number" \
+            | head -n 1)"
+
+          if [ "$HEALTH_OUTCOME" != "success" ]; then
+            checked_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            if [ -z "$issue_number" ]; then
+              gh issue create \
+                --repo "$GITHUB_REPOSITORY" \
+                --title "$ALERT_TITLE" \
+                --body "The scheduled production health check failed at **$checked_at**.
+
+          Endpoint: \`$HEALTH_URL\`
+          Workflow: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+
+          This issue is deduplicated and will close automatically after recovery."
+            fi
+            exit 1
+          fi
+
+          if [ -n "$issue_number" ]; then
+            gh issue close "$issue_number" \
+              --repo "$GITHUB_REPOSITORY" \
+              --comment "The production API health check recovered successfully."
+          fi

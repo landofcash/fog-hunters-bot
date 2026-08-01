@@ -1,4 +1,8 @@
 import type { FastifyBaseLogger } from "fastify";
+import {
+  DiscordWebhookAlertNotifier,
+  type AlertNotifier,
+} from "../../lib/alerts";
 import type { AppConfig } from "../../lib/config";
 import { ApiError } from "../../lib/errors";
 import type {
@@ -8,7 +12,12 @@ import type {
   LlmMessageRecord,
 } from "../../repositories/types";
 import { createLlmProvider } from "./providers/provider-router";
-import type { LlmChatMessage, LlmProvider } from "./providers/types";
+import type {
+  GenerateChatInput,
+  GenerateChatOutput,
+  LlmChatMessage,
+  LlmProvider,
+} from "./providers/types";
 import { buildGatekeeperPrompt, effectiveAssistantPrompt } from "./prompts";
 
 function estimateTokens(text: string): number {
@@ -141,14 +150,23 @@ export interface InternalLlmRespondResult {
 
 export class LlmService {
   private provider: LlmProvider | null;
+  private readonly alerts: AlertNotifier;
 
   constructor(
     private readonly config: AppConfig,
     private readonly repository: AppRepository,
     private readonly logger: FastifyBaseLogger,
     provider?: LlmProvider,
+    alerts?: AlertNotifier,
   ) {
     this.provider = provider ?? null;
+    this.alerts = alerts ?? new DiscordWebhookAlertNotifier(
+      config.alertDiscordWebhookUrl,
+      "fhaibot-api",
+      logger,
+      config.alertCooldownMs,
+      config.alertRequestTimeoutMs,
+    );
   }
 
   private getProvider(): LlmProvider {
@@ -158,6 +176,35 @@ export class LlmService {
     return this.provider;
   }
 
+  private async generateChat(
+    input: GenerateChatInput,
+    context: {
+      phase: "gatekeeper" | "generation";
+      guildId?: string;
+      channelId?: string;
+    },
+  ): Promise<GenerateChatOutput> {
+    try {
+      return await this.getProvider().generateChat(input);
+    } catch (error) {
+      const apiError = error instanceof ApiError ? error : null;
+      await this.alerts.notify({
+        event: "api.openai.failure",
+        title: "OpenAI request failed",
+        severity: "error",
+        details: {
+          phase: context.phase,
+          model: input.model,
+          code: apiError?.code ?? "UNKNOWN",
+          statusCode: apiError?.statusCode,
+          guildId: context.guildId,
+          channelId: context.channelId,
+        },
+      });
+      throw error;
+    }
+  }
+
   private async decideShouldRespond(input: {
     model: string;
     isDm: boolean;
@@ -165,6 +212,8 @@ export class LlmService {
     content: string;
     recentMessages: LlmMessageRecord[];
     guildSettings?: LlmGuildSettingsRecord;
+    guildId?: string;
+    channelId?: string;
   }): Promise<LlmDecision> {
     if (input.botWasMentioned) {
       return {
@@ -195,12 +244,19 @@ export class LlmService {
       },
     ];
 
-    const response = await this.getProvider().generateChat({
-      model: input.model,
-      messages: decisionMessages,
-      maxTokens: 120,
-      timeoutMs: this.config.llmRequestTimeoutMs,
-    });
+    const response = await this.generateChat(
+      {
+        model: input.model,
+        messages: decisionMessages,
+        maxTokens: 120,
+        timeoutMs: this.config.llmRequestTimeoutMs,
+      },
+      {
+        phase: "gatekeeper",
+        guildId: input.guildId,
+        channelId: input.channelId,
+      },
+    );
 
     const parsed = parseDecision(response.text);
     if (!parsed) {
@@ -290,6 +346,8 @@ export class LlmService {
       content,
       recentMessages,
       guildSettings,
+      guildId: input.guildId,
+      channelId: input.channelId,
     });
 
     if (!decision.shouldRespond) {
@@ -325,12 +383,19 @@ export class LlmService {
 
     const startedAt = Date.now();
     try {
-      const completion = await this.getProvider().generateChat({
-        model,
-        messages: promptMessages,
-        maxTokens: maxOutputTokens,
-        timeoutMs: this.config.llmRequestTimeoutMs,
-      });
+      const completion = await this.generateChat(
+        {
+          model,
+          messages: promptMessages,
+          maxTokens: maxOutputTokens,
+          timeoutMs: this.config.llmRequestTimeoutMs,
+        },
+        {
+          phase: "generation",
+          guildId: input.guildId,
+          channelId: input.channelId,
+        },
+      );
 
       const responseText = completion.text.trim();
       if (!responseText) {

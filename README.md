@@ -85,6 +85,10 @@ After the workflow runs on GitHub for the first time, require the `Quality`, `Un
 
 CI validates the repository only. It does not deploy or change the Railway project.
 
+Railway deploys the API and bot automatically from `main` after CI succeeds.
+Production health monitoring, runtime alerts, and the `/ping`-only deployment
+smoke test are documented in [OPERATIONS.md](./OPERATIONS.md).
+
 ## Environment
 
 Copy the relevant example before starting an application:

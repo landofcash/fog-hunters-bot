@@ -44,6 +44,9 @@ export async function createTestApp(): Promise<{
     llmMaxOutputTokens: 512,
     llmRequestTimeoutMs: 15000,
     llmGlobalKillSwitch: false,
+    alertDiscordWebhookUrl: undefined,
+    alertCooldownMs: 300_000,
+    alertRequestTimeoutMs: 3_000,
   };
 
   const repo = new InMemoryRepository();

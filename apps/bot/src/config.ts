@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+const optionalUrl = z.preprocess(
+  (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
+  z.string().url().optional(),
+);
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
@@ -14,6 +19,9 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform((value) => value === "true"),
+  ALERT_DISCORD_WEBHOOK_URL: optionalUrl,
+  ALERT_COOLDOWN_MS: z.coerce.number().int().nonnegative().default(300_000),
+  ALERT_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(3_000),
 });
 
 export interface BotConfig {
@@ -27,6 +35,9 @@ export interface BotConfig {
   httpTimeoutMs: number;
   httpRetryMax: number;
   commandSyncOnStart: boolean;
+  alertDiscordWebhookUrl?: string;
+  alertCooldownMs: number;
+  alertRequestTimeoutMs: number;
 }
 
 export function loadConfig(source: NodeJS.ProcessEnv = process.env): BotConfig {
@@ -45,5 +56,8 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): BotConfig {
     httpTimeoutMs: parsed.HTTP_TIMEOUT_MS,
     httpRetryMax: parsed.HTTP_RETRY_MAX,
     commandSyncOnStart: parsed.COMMAND_SYNC_ON_START ?? true,
+    alertDiscordWebhookUrl: parsed.ALERT_DISCORD_WEBHOOK_URL,
+    alertCooldownMs: parsed.ALERT_COOLDOWN_MS,
+    alertRequestTimeoutMs: parsed.ALERT_REQUEST_TIMEOUT_MS,
   };
 }
