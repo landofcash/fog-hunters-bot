@@ -46,7 +46,7 @@ export function AdministratorsPage() {
       <PageHeader
         eyebrow="Access control"
         title="Administrators"
-        description="Guild owners can grant or remove the ADMIN role. Ownership remains protected by the API."
+        description="Guild owners and platform administrators can grant or remove the ADMIN role. Ownership remains protected by the API."
         action={<Badge variant="outline">{privileged.length} privileged members</Badge>}
       />
       {members.error ? <ErrorState error={members.error} /> : null}
