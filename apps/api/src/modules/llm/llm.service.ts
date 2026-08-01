@@ -128,6 +128,11 @@ export interface InternalLlmRespondInput {
   discordUserId: string;
   content: string;
   messageId?: string;
+  contextMessages?: Array<{
+    discordUserId: string;
+    content: string;
+    messageId?: string;
+  }>;
   isDm: boolean;
   botWasMentioned: boolean;
 }
@@ -294,6 +299,7 @@ export class LlmService {
 
     let guildSettings: LlmGuildSettingsRecord | undefined;
     let guildInternalId: string | undefined;
+    let mentionRequired = false;
 
     if (!input.isDm) {
       if (!input.guildId || !input.channelId) {
@@ -327,10 +333,7 @@ export class LlmService {
           };
         }
       } else if (channelSettings.respondOnMentionOnly && !input.botWasMentioned) {
-        return {
-          shouldRespond: false,
-          reason: "MENTION_REQUIRED",
-        };
+        mentionRequired = true;
       }
     }
 
@@ -342,7 +345,37 @@ export class LlmService {
       discordUserId: input.discordUserId,
     });
 
-    const content = capByChars(trimmed, guildSettings?.maxInputChars ?? this.config.llmMaxInputChars);
+    const maxInputChars = guildSettings?.maxInputChars ?? this.config.llmMaxInputChars;
+    for (const contextMessage of (input.contextMessages ?? []).slice(-19)) {
+      const contextContent = contextMessage.content.trim();
+      if (!contextContent) {
+        continue;
+      }
+      const storedContent = capByChars(contextContent, maxInputChars);
+      await this.repository.appendConversationMessage({
+        conversationId: conversation.id,
+        role: "USER",
+        content: storedContent,
+        tokenCount: estimateTokens(storedContent),
+      });
+    }
+
+    const content = capByChars(trimmed, maxInputChars);
+
+    if (mentionRequired) {
+      await this.repository.appendConversationMessage({
+        conversationId: conversation.id,
+        role: "USER",
+        content,
+        tokenCount: estimateTokens(content),
+      });
+      return {
+        shouldRespond: false,
+        reason: "MENTION_REQUIRED",
+        conversationId: conversation.id,
+      };
+    }
+
     const recentMessages = await this.repository.listRecentConversationMessages(conversation.id, 20);
     const model = guildSettings?.defaultModel ?? this.config.llmDefaultModel;
 
@@ -357,6 +390,13 @@ export class LlmService {
       channelId: input.channelId,
     });
 
+    const currentMessage = await this.repository.appendConversationMessage({
+      conversationId: conversation.id,
+      role: "USER",
+      content,
+      tokenCount: estimateTokens(content),
+    });
+
     if (!decision.shouldRespond) {
       return {
         shouldRespond: false,
@@ -365,13 +405,6 @@ export class LlmService {
         decision,
       };
     }
-
-    const currentMessage = await this.repository.appendConversationMessage({
-      conversationId: conversation.id,
-      role: "USER",
-      content,
-      tokenCount: estimateTokens(content),
-    });
 
     const generationContext = await this.repository.listRecentConversationMessages(conversation.id, 20);
 
@@ -385,7 +418,7 @@ export class LlmService {
       summary: conversation.summaryText,
       recentMessages: generationContext.filter((message) => message.id !== currentMessage.id),
       currentContent: content,
-      maxInputChars: guildSettings?.maxInputChars ?? this.config.llmMaxInputChars,
+      maxInputChars,
     });
 
     const startedAt = Date.now();

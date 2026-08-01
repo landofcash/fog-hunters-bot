@@ -255,6 +255,9 @@ describe("LlmService", () => {
 
       const mentionService = new LlmService(mentionOnly.config, mentionOnly.repo, mentionOnly.app.log, { generateChat: vi.fn() });
       await expect(mentionService.respondToMessage(messageInput())).resolves.toMatchObject({ reason: "MENTION_REQUIRED" });
+      expect(mentionOnly.repo.llmMessages).toEqual([
+        expect.objectContaining({ role: "USER", content: "What is the answer?" }),
+      ]);
     } finally {
       await disabled.app.close();
       await mentionOnly.app.close();
@@ -280,7 +283,7 @@ describe("LlmService", () => {
     }
   });
 
-  it("does not persist a user message when the gatekeeper rejects or is unparseable", async () => {
+  it("retains user messages that the gatekeeper rejects or cannot classify", async () => {
     for (const text of [JSON.stringify({ shouldRespond: false, reason: "CHATTER", confidence: 0.9 }), "not-json"]) {
       const { app, repo, config } = await createLlmFixture();
       try {
@@ -290,10 +293,102 @@ describe("LlmService", () => {
         const service = new LlmService(config, repo, app.log, provider);
         const result = await service.respondToMessage(messageInput());
         expect(result.shouldRespond).toBe(false);
-        expect(repo.llmMessages).toHaveLength(0);
+        expect(repo.llmMessages).toHaveLength(1);
+        expect(repo.llmMessages[0]).toMatchObject({
+          role: "USER",
+          content: "What is the answer?",
+        });
       } finally {
         await app.close();
       }
+    }
+  });
+
+  it("uses earlier non-response messages as gatekeeper context", async () => {
+    const { app, repo, config } = await createLlmFixture();
+    try {
+      const generateChat = vi
+        .fn<LlmProvider["generateChat"]>()
+        .mockResolvedValueOnce({
+          text: JSON.stringify({ shouldRespond: false, reason: "CHATTER", confidence: 0.9 }),
+          usage: { inputTokens: 1, outputTokens: 1 },
+        })
+        .mockResolvedValueOnce({
+          text: JSON.stringify({ shouldRespond: true, reason: "CONTEXTUAL_QUESTION", confidence: 1 }),
+          usage: { inputTokens: 2, outputTokens: 1 },
+        })
+        .mockResolvedValueOnce({
+          text: "The operation is called Black Sail.",
+          usage: { inputTokens: 3, outputTokens: 2 },
+        });
+      const service = new LlmService(config, repo, app.log, { generateChat });
+
+      await service.respondToMessage(messageInput({ content: "The operation is called Black Sail." }));
+      const result = await service.respondToMessage(messageInput({ content: "What is it called?" }));
+
+      expect(result).toMatchObject({
+        shouldRespond: true,
+        replyText: "The operation is called Black Sail.",
+      });
+      const gatekeeperInput = generateChat.mock.calls[1]?.[0].messages[1]?.content ?? "";
+      expect(gatekeeperInput).toContain("The operation is called Black Sail.");
+      expect(repo.llmMessages).toEqual(expect.arrayContaining([
+        expect.objectContaining({ role: "USER", content: "The operation is called Black Sail." }),
+        expect.objectContaining({ role: "USER", content: "What is it called?" }),
+      ]));
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("stores a buffered message sequence before making one gatekeeper decision", async () => {
+    const { app, repo, config } = await createLlmFixture();
+    try {
+      const generateChat = vi
+        .fn<LlmProvider["generateChat"]>()
+        .mockResolvedValueOnce({
+          text: JSON.stringify({ shouldRespond: true, reason: "CONTEXTUAL_QUESTION", confidence: 1 }),
+          usage: { inputTokens: 2, outputTokens: 1 },
+        })
+        .mockResolvedValueOnce({
+          text: "Black Sail launches at dawn.",
+          usage: { inputTokens: 4, outputTokens: 2 },
+        });
+      const service = new LlmService(config, repo, app.log, { generateChat });
+
+      const result = await service.respondToMessage(messageInput({
+        content: "When does it launch?",
+        messageId: "message-3",
+        contextMessages: [
+          {
+            discordUserId: "discord-user-a",
+            content: "The operation is Black Sail.",
+            messageId: "message-1",
+          },
+          {
+            discordUserId: "discord-user-b",
+            content: "It launches at dawn.",
+            messageId: "message-2",
+          },
+        ],
+      }));
+
+      expect(result).toMatchObject({
+        shouldRespond: true,
+        replyText: "Black Sail launches at dawn.",
+      });
+      expect(generateChat).toHaveBeenCalledTimes(2);
+      const gatekeeperInput = generateChat.mock.calls[0]?.[0].messages[1]?.content ?? "";
+      expect(gatekeeperInput).toContain("The operation is Black Sail.");
+      expect(gatekeeperInput).toContain("It launches at dawn.");
+      expect(repo.llmMessages.map((message) => message.content)).toEqual([
+        "The operation is Black Sail.",
+        "It launches at dawn.",
+        "When does it launch?",
+        "Black Sail launches at dawn.",
+      ]);
+    } finally {
+      await app.close();
     }
   });
 

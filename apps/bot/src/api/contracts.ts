@@ -87,6 +87,11 @@ export interface InternalLlmRespondRequest {
   discordUserId: string;
   content: string;
   messageId?: string;
+  contextMessages?: Array<{
+    discordUserId: string;
+    content: string;
+    messageId?: string;
+  }>;
   isDm: boolean;
   botWasMentioned: boolean;
 }

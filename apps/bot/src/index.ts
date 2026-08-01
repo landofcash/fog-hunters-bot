@@ -6,7 +6,7 @@ import { createDiscordClient } from "./discord/client";
 import { handleGuildCreateEvent } from "./events/guild-create";
 import { handleGuildUpdateEvent } from "./events/guild-update";
 import { handleInteractionCreateEvent } from "./events/interaction-create";
-import { handleMessageCreateEvent } from "./events/message-create";
+import { MessageResponseBuffer } from "./events/message-create";
 import { handleReadyEvent } from "./events/ready";
 import { createLogger } from "./logger";
 import { DiscordWebhookAlertNotifier } from "./runtime/alerts";
@@ -24,6 +24,7 @@ async function main(): Promise<void> {
     config.alertCooldownMs,
     config.alertRequestTimeoutMs,
   );
+  const messageResponseBuffer = new MessageResponseBuffer(apiClient, logger);
   let shuttingDown = false;
 
   registerDiscordLifecycleAlerts({
@@ -73,11 +74,7 @@ async function main(): Promise<void> {
   });
 
   client.on(Events.MessageCreate, async (message) => {
-    await handleMessageCreateEvent({
-      message,
-      apiClient,
-      logger,
-    });
+    await messageResponseBuffer.enqueue(message);
   });
 
   await client.login(config.discordBotToken);
@@ -85,6 +82,7 @@ async function main(): Promise<void> {
   const shutdown = async (): Promise<void> => {
     shuttingDown = true;
     logger.info("Shutting down Discord bot");
+    await messageResponseBuffer.flushAll();
     client.destroy();
     process.exit(0);
   };

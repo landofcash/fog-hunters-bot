@@ -541,6 +541,7 @@ export async function registerInternalRoutes(app: FastifyInstance): Promise<void
         discordUserId: body.discordUserId,
         content: body.content,
         messageId: body.messageId,
+        contextMessages: body.contextMessages,
         isDm: body.isDm,
         botWasMentioned: body.botWasMentioned,
       });

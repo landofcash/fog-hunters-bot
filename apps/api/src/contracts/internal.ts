@@ -41,6 +41,11 @@ export const internalLlmRespondBodySchema = z.object({
   discordUserId: z.string().min(1),
   content: z.string().min(1).max(8000),
   messageId: z.string().optional(),
+  contextMessages: z.array(z.object({
+    discordUserId: z.string().min(1),
+    content: z.string().min(1).max(8000),
+    messageId: z.string().optional(),
+  })).max(19).default([]),
   isDm: z.boolean().default(false),
   botWasMentioned: z.boolean().default(false),
 });
