@@ -51,4 +51,18 @@ describe("authentication and request guards", () => {
     expect(response.status).toBe(200);
     expect(response.body.guild.discordGuildId).toBe(guild.discordGuildId);
   });
+
+  it("redirects dashboard OAuth callbacks into the SPA", async () => {
+    const { app } = await createTestApp();
+    closers.push(() => app.close());
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/v1/auth/discord/callback?code=discord_dashboard_user&state=dashboard",
+    });
+
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe("/guilds");
+    expect(response.headers["set-cookie"]).toBeDefined();
+  });
 });

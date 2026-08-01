@@ -41,6 +41,10 @@ export async function registerAuthRoutes(app: FastifyInstance): Promise<void> {
       secure: app.appConfig.nodeEnv === "production",
     });
 
+    if (query.state === "dashboard") {
+      return reply.redirect("/guilds");
+    }
+
     return {
       authenticated: true,
       userId: session.userId,

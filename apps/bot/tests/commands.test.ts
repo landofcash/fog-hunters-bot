@@ -30,20 +30,10 @@ describe("command definitions", () => {
         }
       | undefined;
     const subcommands = ai?.options?.map((option) => option.name).sort();
-    expect(subcommands).toEqual(["disable", "enable", "memory-clear", "model", "prompt", "retention", "status"]);
+    expect(subcommands).toEqual(["disable", "enable", "memory-clear", "prompt", "retention", "status"]);
 
     const enable = ai?.options?.find((option) => option.name === "enable");
     expect(enable?.options?.find((option) => option.name === "channel")?.required).toBe(true);
-
-    const model = ai?.options?.find((option) => option.name === "model");
-    const modelName = model?.options?.find((option) => option.name === "name");
-    expect(modelName?.required).toBe(true);
-    expect(modelName?.choices?.map((choice) => choice.value)).toEqual([
-      "gpt-5.6-terra",
-      "gpt-5.6-sol",
-      "gpt-5.6-luna",
-      "gpt-4.1-mini",
-    ]);
 
     const prompt = ai?.options?.find((option) => option.name === "prompt");
     expect(prompt?.options?.map((option) => option.name).sort()).toEqual(["reset", "set", "view"]);

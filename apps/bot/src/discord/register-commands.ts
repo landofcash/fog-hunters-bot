@@ -1,6 +1,5 @@
 import { REST, Routes, SlashCommandBuilder } from "discord.js";
 import type { Logger } from "pino";
-import { AI_MODEL_CHOICES } from "../commands/protected/ai-models";
 
 export const commandDefinitions = [
   new SlashCommandBuilder().setName("ping").setDescription("Check bot latency and availability."),
@@ -46,18 +45,6 @@ export const commandDefinitions = [
     .setDescription("AI chat administration commands")
     .addSubcommand((sub) =>
       sub.setName("status").setDescription("View AI settings for this server"),
-    )
-    .addSubcommand((sub) =>
-      sub
-        .setName("model")
-        .setDescription("Set the AI model for this server")
-        .addStringOption((option) =>
-          option
-            .setName("name")
-            .setDescription("AI model")
-            .setRequired(true)
-            .addChoices(...AI_MODEL_CHOICES),
-        ),
     )
     .addSubcommand((sub) =>
       sub

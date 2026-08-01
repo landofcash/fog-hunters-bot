@@ -63,12 +63,6 @@ export const DEFAULT_COMMAND_POLICIES: DefaultCommandPolicy[] = [
     denyChannels: [],
   },
   {
-    commandKey: "ai.model",
-    minRole: "ADMIN",
-    allowChannels: [],
-    denyChannels: [],
-  },
-  {
     commandKey: "ai.enable",
     minRole: "ADMIN",
     allowChannels: [],
@@ -112,4 +106,4 @@ export const DEFAULT_COMMAND_POLICIES: DefaultCommandPolicy[] = [
   },
 ];
 
-export const RETIRED_COMMAND_POLICY_KEYS = ["ai.style"] as const;
+export const RETIRED_COMMAND_POLICY_KEYS = ["ai.style", "ai.model"] as const;
