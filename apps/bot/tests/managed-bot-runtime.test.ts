@@ -3,7 +3,7 @@ import { Events, type Client } from "discord.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotClaimResponse } from "../src/api/contracts";
 import { ManagedBotRuntime } from "../src/runtime/managed-bot-runtime";
-import { createBotConfig, createLoggerMock } from "./helpers/fixtures";
+import { createBotConfig, createLoggerMock, createMessageMock } from "./helpers/fixtures";
 
 const runtimeMocks = vi.hoisted(() => ({
   client: undefined as unknown as Client,
@@ -13,6 +13,8 @@ const runtimeMocks = vi.hoisted(() => ({
   acquireEvent: vi.fn(),
   completeEvent: vi.fn(),
   failEvent: vi.fn(),
+  touchUser: vi.fn(),
+  respondWithLlm: vi.fn(),
   handleReadyEvent: vi.fn(),
   handleInteractionCreateEvent: vi.fn(),
 }));
@@ -26,6 +28,8 @@ vi.mock("../src/api/client", () => ({
     acquireEvent = runtimeMocks.acquireEvent;
     completeEvent = runtimeMocks.completeEvent;
     failEvent = runtimeMocks.failEvent;
+    touchUser = runtimeMocks.touchUser;
+    respondWithLlm = runtimeMocks.respondWithLlm;
   },
 }));
 
@@ -107,6 +111,8 @@ describe("ManagedBotRuntime", () => {
     });
     runtimeMocks.completeEvent.mockResolvedValue(undefined);
     runtimeMocks.failEvent.mockResolvedValue(undefined);
+    runtimeMocks.touchUser.mockResolvedValue(undefined);
+    runtimeMocks.respondWithLlm.mockResolvedValue({ shouldRespond: false });
     runtimeMocks.handleInteractionCreateEvent.mockResolvedValue(undefined);
     runtimeMocks.heartbeat.mockImplementation(async (input: { runtimeState: string }) => ({
       lease: {
@@ -308,6 +314,89 @@ describe("ManagedBotRuntime", () => {
       "00000000-0000-4000-8000-000000000002",
     );
     expect(runtimeMocks.failEvent).not.toHaveBeenCalled();
+
+    await runtime.stop({ releaseLease: false, reason: "test complete" });
+  });
+
+  it("serializes receipt acquisition and buffering for messages in one channel", async () => {
+    runtimeMocks.handleReadyEvent.mockResolvedValue(undefined);
+    let resolveOlderReceipt!: (value: unknown) => void;
+    runtimeMocks.acquireEvent.mockImplementation((eventId: string) => {
+      const acquisition = {
+        receipt: {
+          id: `00000000-0000-4000-8000-00000000000${eventId}`,
+          acquisitionRequestId: `10000000-0000-4000-8000-00000000000${eventId}`,
+          processingStatus: "PROCESSING",
+          attemptCount: 1,
+        },
+        acquired: true,
+      };
+      if (eventId === "1") {
+        return new Promise((resolve) => {
+          resolveOlderReceipt = resolve;
+        });
+      }
+      return Promise.resolve(acquisition);
+    });
+    const client = runtimeMocks.client as unknown as FakeDiscordClient;
+    const logger = createLoggerMock();
+    Object.assign(logger, { child: vi.fn().mockReturnValue(logger) });
+    const runtime = new ManagedBotRuntime(
+      createBotConfig(),
+      createClaim(),
+      logger,
+      vi.fn(),
+    );
+
+    const start = runtime.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await start;
+
+    client.emit(Events.MessageCreate, createMessageMock({
+      id: "1",
+      content: "Older message",
+    }));
+    client.emit(Events.MessageCreate, createMessageMock({
+      id: "2",
+      content: "Newer message",
+    }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(runtimeMocks.acquireEvent).toHaveBeenCalledTimes(1);
+    expect(runtimeMocks.acquireEvent).toHaveBeenCalledWith("1", "MESSAGE_CREATE");
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(runtimeMocks.respondWithLlm).not.toHaveBeenCalled();
+
+    resolveOlderReceipt({
+      receipt: {
+        id: "00000000-0000-4000-8000-000000000001",
+        acquisitionRequestId: "10000000-0000-4000-8000-000000000001",
+        processingStatus: "PROCESSING",
+        attemptCount: 1,
+      },
+      acquired: true,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(runtimeMocks.acquireEvent).toHaveBeenNthCalledWith(
+      2,
+      "2",
+      "MESSAGE_CREATE",
+    );
+    expect(runtimeMocks.respondWithLlm).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(runtimeMocks.respondWithLlm).toHaveBeenCalledTimes(1);
+    expect(runtimeMocks.respondWithLlm).toHaveBeenCalledWith(expect.objectContaining({
+      content: "Newer message",
+      messageId: "2",
+      contextMessages: [{
+        discordUserId: "user-1",
+        content: "Older message",
+        messageId: "1",
+      }],
+    }));
 
     await runtime.stop({ releaseLease: false, reason: "test complete" });
   });

@@ -120,6 +120,23 @@ afterAll(async () => {
 });
 
 describe("multi-bot repository", () => {
+  it("revokes a stored platform role when the configured check is false", async () => {
+    const profile = {
+      discordUserId: "removed-platform-admin",
+      username: "removed-admin",
+    };
+
+    expect(await repository.upsertUserFromDiscord(profile, true)).toMatchObject({
+      platformRole: "PLATFORM_ADMIN",
+    });
+    expect(await repository.upsertUserFromDiscord(profile, false)).toMatchObject({
+      platformRole: "NONE",
+    });
+    expect(await repository.getUserByDiscordId(profile.discordUserId)).toMatchObject({
+      platformRole: "NONE",
+    });
+  });
+
   it("isolates two bot installations, conversations, settings, and flags in one guild", async () => {
     const { bot: botA } = await createBot("alpha", "application-alpha");
     const { bot: botB } = await createBot("beta", "application-beta");
@@ -370,6 +387,111 @@ describe("multi-bot repository", () => {
       claimedTokenVersion: recovery.bot.tokenVersion + 1,
       revokedAt: null,
     });
+  });
+
+  it("preserves the runtime safety deadline across token deletion and status revocation", async () => {
+    const now = new Date();
+    const scenarios = [
+      {
+        suffix: "token-deletion",
+        revokeAndReactivate: async (botInstanceId: string) => {
+          await repository.deleteBotToken(botInstanceId);
+          await repository.configureBotToken({
+            botInstanceId,
+            ciphertext: Buffer.from("replacement-token"),
+            nonce: Buffer.alloc(12, 3),
+            authenticationTag: Buffer.alloc(16, 4),
+            encryptionKeyVersion: 1,
+            rotatedAt: new Date(now.getTime() + 1_000),
+          });
+          await repository.updateBot({
+            botInstanceId,
+            desiredStatus: "ACTIVE",
+          });
+        },
+      },
+      {
+        suffix: "status-revocation",
+        revokeAndReactivate: async (botInstanceId: string) => {
+          await repository.updateBot({
+            botInstanceId,
+            desiredStatus: "DISABLED",
+          });
+          await repository.updateBot({
+            botInstanceId,
+            desiredStatus: "ACTIVE",
+          });
+        },
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const { bot } = await createBot(
+        `lease-${scenario.suffix}`,
+        `application-lease-${scenario.suffix}`,
+      );
+      await repository.configureBotToken({
+        botInstanceId: bot.id,
+        ciphertext: Buffer.from(`token-${scenario.suffix}`),
+        nonce: Buffer.alloc(12, 1),
+        authenticationTag: Buffer.alloc(16, 2),
+        encryptionKeyVersion: 1,
+        rotatedAt: now,
+      });
+      await repository.updateBot({
+        botInstanceId: bot.id,
+        desiredStatus: "ACTIVE",
+      });
+      const claim = await repository.claimRuntime({
+        botInstanceId: bot.id,
+        runtimeInstanceId: `runtime-${scenario.suffix}`,
+        claimRequestId: randomUUID(),
+        leaseToken: `lease-${scenario.suffix}`,
+        leaseTokenHash: `hash-${scenario.suffix}`,
+        now,
+        expiresAt: new Date(now.getTime() + 60_000),
+      });
+
+      await scenario.revokeAndReactivate(bot.id);
+
+      expect(await repository.getRuntimeLease(bot.id)).toMatchObject({
+        runtimeInstanceId: null,
+        claimRequestId: null,
+        leaseGeneration: claim.lease.leaseGeneration,
+        runtimeState: "STOPPED",
+        expiresAt: new Date(now.getTime() + 60_000),
+        claimedTokenVersion: null,
+        revokedAt: expect.any(Date),
+      });
+      await expectApiCode(
+        repository.claimRuntime({
+          botInstanceId: bot.id,
+          runtimeInstanceId: `replacement-${scenario.suffix}`,
+          claimRequestId: randomUUID(),
+          leaseToken: `replacement-lease-${scenario.suffix}`,
+          leaseTokenHash: `replacement-hash-${scenario.suffix}`,
+          now: new Date(now.getTime() + 59_999),
+          expiresAt: new Date(now.getTime() + 119_999),
+        }),
+        "BOT_LEASE_CONFLICT",
+      );
+
+      const replacement = await repository.claimRuntime({
+        botInstanceId: bot.id,
+        runtimeInstanceId: `replacement-${scenario.suffix}`,
+        claimRequestId: randomUUID(),
+        leaseToken: `replacement-lease-${scenario.suffix}`,
+        leaseTokenHash: `replacement-hash-${scenario.suffix}`,
+        now: new Date(now.getTime() + 60_000),
+        expiresAt: new Date(now.getTime() + 120_000),
+      });
+      expect(replacement.lease).toMatchObject({
+        runtimeInstanceId: `replacement-${scenario.suffix}`,
+        leaseGeneration: claim.lease.leaseGeneration + 1,
+        runtimeState: "CLAIMED",
+        revokedAt: null,
+      });
+    }
   });
 
   it("serializes activation with token deletion", async () => {
@@ -1073,25 +1195,48 @@ describe("multi-bot API contracts", () => {
       expect(assignments.statusCode).toBe(200);
       expect(assignments.body).not.toContain(discordToken);
 
+      const claimPayload = {
+        runtimeInstanceId: "integration-runtime",
+        claimRequestId: "44444444-4444-4444-8444-444444444444",
+      };
       const claim = await app.inject({
         method: "POST",
         url: `/api/v1/internal/runtime/assignments/${botId}/claim`,
         headers: { authorization: `Bearer ${poolCredential}` },
-        payload: {
-          runtimeInstanceId: "integration-runtime",
-          claimRequestId: "44444444-4444-4444-8444-444444444444",
-        },
+        payload: claimPayload,
       });
       expect(claim.statusCode).toBe(200);
       expect(claim.headers["cache-control"]).toBe("no-store");
       const claimBody = claim.json();
       expect(claimBody.discordToken).toBe(discordToken);
 
+      const recoveredClaim = await app.inject({
+        method: "POST",
+        url: `/api/v1/internal/runtime/assignments/${botId}/claim`,
+        headers: { authorization: `Bearer ${poolCredential}` },
+        payload: claimPayload,
+      });
+      expect(recoveredClaim.statusCode).toBe(200);
+      expect(recoveredClaim.json()).toMatchObject({
+        leaseToken: claimBody.leaseToken,
+        lease: {
+          leaseGeneration: claimBody.lease.leaseGeneration,
+        },
+      });
+
       const leaseHeaders = {
         authorization: `Bearer ${claimBody.leaseToken as string}`,
         "x-bot-instance-id": botId,
         "x-bot-lease-generation": String(claimBody.lease.leaseGeneration),
       };
+      const recoveredHeartbeat = await app.inject({
+        method: "POST",
+        url: `/api/v1/internal/runtime/assignments/${botId}/heartbeat`,
+        headers: leaseHeaders,
+        payload: { runtimeState: "CONNECTING" },
+      });
+      expect(recoveredHeartbeat.statusCode).toBe(200);
+
       const poolWithLease = await app.inject({
         method: "GET",
         url: "/api/v1/internal/runtime/assignments",
@@ -1703,6 +1848,10 @@ describe("multi-bot API contracts", () => {
       await prisma.botTokenSecret.update({
         where: { botInstanceId: botId },
         data: { ciphertext: Buffer.from("corrupted-token-ciphertext") },
+      });
+      await prisma.botRuntimeLease.update({
+        where: { botInstanceId: botId },
+        data: { expiresAt: new Date(Date.now() - 1) },
       });
 
       const failedDecryptClaim = await app.inject({

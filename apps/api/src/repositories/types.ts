@@ -369,7 +369,7 @@ export interface AppRepository {
   heartbeatRuntime(input: { botInstanceId: string; leaseGeneration: number; leaseTokenHash: string; now: Date; expiresAt: Date; runtimeState?: BotRuntimeState; connectedAt?: Date; errorCode?: string | null }): Promise<BotRuntimeLeaseRecord>;
   releaseRuntime(input: { botInstanceId: string; leaseGeneration: number; leaseTokenHash: string; now: Date }): Promise<BotRuntimeLeaseRecord>;
   validateRuntimeLease(input: { botInstanceId: string; leaseGeneration: number; leaseTokenHash: string; now: Date }): Promise<{ bot: BotInstanceRecord; lease: BotRuntimeLeaseRecord }>;
-  revokeRuntimeLease(botInstanceId: string, now: Date): Promise<void>;
+  revokeRuntimeLease(botInstanceId: string, now: Date, options?: { preserveExpiry?: boolean }): Promise<void>;
 
   acquireDiscordEvent(input: { botInstanceId: string; discordEventId: string; eventType: DiscordEventType; leaseGeneration: number; acquisitionRequestId: string; now: Date; expiresAt: Date; staleBefore: Date; maxAttempts: number }): Promise<{ receipt: DiscordEventReceiptRecord; acquired: boolean }>;
   completeDiscordEvent(input: { receiptId: string; botInstanceId: string; leaseGeneration: number; acquisitionRequestId: string }): Promise<void>;

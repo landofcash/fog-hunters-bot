@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { randomBytes } from "node:crypto";
+import { createHmac } from "node:crypto";
 import { z } from "zod";
 import { LLM_PROMPT_MAX_LENGTH } from "../../contracts/llm";
 import { ApiError, isApiError } from "../../lib/errors";
@@ -110,6 +110,22 @@ const failureBody = receiptAttemptBody.extend({
 function noStore(reply: { header(name: string, value: string): unknown }): void {
   reply.header("Cache-Control", "no-store");
   reply.header("Pragma", "no-cache");
+}
+
+function deriveRuntimeLeaseToken(input: {
+  secret: string;
+  botInstanceId: string;
+  runtimeInstanceId: string;
+  claimRequestId: string;
+}): string {
+  return createHmac("sha256", input.secret)
+    .update(JSON.stringify([
+      "fhaibot-runtime-lease-v1",
+      input.botInstanceId,
+      input.runtimeInstanceId,
+      input.claimRequestId,
+    ]))
+    .digest("base64url");
 }
 
 function leaseContext(request: FastifyRequest) {
@@ -248,7 +264,12 @@ export async function registerInternalRoutes(app: FastifyInstance): Promise<void
       noStore(reply);
       const { botId } = botParams.parse(request.params);
       const body = claimBody.parse(request.body ?? {});
-      const leaseToken = randomBytes(32).toString("base64url");
+      const leaseToken = deriveRuntimeLeaseToken({
+        secret: pool.appConfig.sessionSecret,
+        botInstanceId: botId,
+        runtimeInstanceId: body.runtimeInstanceId,
+        claimRequestId: body.claimRequestId,
+      });
       const now = new Date();
       const claim = await pool.repository.claimRuntime({
         botInstanceId: botId,
@@ -273,7 +294,7 @@ export async function registerInternalRoutes(app: FastifyInstance): Promise<void
         });
       } catch (error) {
         if (isApiError(error) && error.code === "BOT_TOKEN_DECRYPT_FAILED") {
-          await pool.repository.revokeRuntimeLease(botId, now);
+          await pool.repository.revokeRuntimeLease(botId, now, { preserveExpiry: false });
         }
         throw error;
       }

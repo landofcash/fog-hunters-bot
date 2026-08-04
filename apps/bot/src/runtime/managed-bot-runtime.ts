@@ -1,4 +1,4 @@
-import { Events, type Client, type Interaction } from "discord.js";
+import { Events, type Client, type Interaction, type Message } from "discord.js";
 import type { Logger } from "pino";
 import { ApiClient } from "../api/client";
 import type { BotClaimResponse } from "../api/contracts";
@@ -39,6 +39,7 @@ export class ManagedBotRuntime {
   private readonly apiClient: ApiClient;
   private readonly client: Client;
   private readonly messageBuffer: MessageResponseBuffer;
+  private readonly messageEventStartTails = new Map<string, Promise<void>>();
   private readonly logger: Logger;
   private leaseExpiresAt: number;
   private heartbeatTimer?: ReturnType<typeof setTimeout>;
@@ -254,10 +255,30 @@ export class ManagedBotRuntime {
 
     this.client.on(Events.MessageCreate, (message) => {
       if (!this.canAcceptNewWork()) return;
-      void this.processEvent(message.id, "MESSAGE_CREATE", () =>
-        this.messageBuffer.enqueueAndWait(message),
-      );
+      this.queueMessageEvent(message);
     });
+  }
+
+  private queueMessageEvent(message: Message): void {
+    const channelKey = `${message.guildId ?? "dm"}:${message.channelId}`;
+    const previous = this.messageEventStartTails.get(channelKey) ?? Promise.resolve();
+    let current: Promise<void>;
+    current = previous
+      .catch(() => undefined)
+      .then(() => new Promise<void>((resolveStarted) => {
+        void this.processEvent(
+          message.id,
+          "MESSAGE_CREATE",
+          () => this.messageBuffer.enqueueAndWait(message),
+          resolveStarted,
+        );
+      }))
+      .finally(() => {
+        if (this.messageEventStartTails.get(channelKey) === current) {
+          this.messageEventStartTails.delete(channelKey);
+        }
+      });
+    this.messageEventStartTails.set(channelKey, current);
   }
 
   private fenceInteraction(interaction: Interaction): void {
@@ -323,8 +344,18 @@ export class ManagedBotRuntime {
     eventId: string,
     eventType: "MESSAGE_CREATE" | "INTERACTION_CREATE",
     handler: () => Promise<void>,
+    onHandlerStarted?: () => void,
   ): Promise<void> {
-    if (!this.canAcceptNewWork()) return;
+    let handlerStarted = false;
+    const signalHandlerStarted = () => {
+      if (handlerStarted) return;
+      handlerStarted = true;
+      onHandlerStarted?.();
+    };
+    if (!this.canAcceptNewWork()) {
+      signalHandlerStarted();
+      return;
+    }
 
     let receipt: { id: string; acquisitionRequestId: string } | undefined;
     try {
@@ -339,7 +370,13 @@ export class ManagedBotRuntime {
         );
         return;
       }
-      await handler();
+      let handlerPromise: Promise<void>;
+      try {
+        handlerPromise = handler();
+      } finally {
+        signalHandlerStarted();
+      }
+      await handlerPromise;
       if (!this.canPerformDiscordSideEffects()) {
         await this.apiClient.failEvent(
           receipt.id,
@@ -365,6 +402,8 @@ export class ManagedBotRuntime {
             );
           });
       }
+    } finally {
+      signalHandlerStarted();
     }
   }
 

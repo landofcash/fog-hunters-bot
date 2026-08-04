@@ -362,7 +362,7 @@ export class PrismaAppRepository implements AppRepository {
         username: profile.username,
         globalName: profile.globalName,
         avatarUrl: profile.avatarUrl,
-        ...(isPlatformAdmin ? { platformRole: "PLATFORM_ADMIN" as const } : {}),
+        platformRole: isPlatformAdmin ? "PLATFORM_ADMIN" : "NONE",
       },
     });
     return mapUser(row);
@@ -686,7 +686,6 @@ export class PrismaAppRepository implements AppRepository {
           runtimeInstanceId: null,
           claimRequestId: null,
           leaseTokenHash: null,
-          expiresAt: null,
           claimedTokenVersion: null,
         },
       });
@@ -1355,7 +1354,11 @@ export class PrismaAppRepository implements AppRepository {
     return { bot: mapBot(bot), lease: mapLease(bot.runtimeLease) };
   }
 
-  async revokeRuntimeLease(botInstanceId: string, now: Date): Promise<void> {
+  async revokeRuntimeLease(
+    botInstanceId: string,
+    now: Date,
+    options: { preserveExpiry?: boolean } = {},
+  ): Promise<void> {
     await this.prisma.$transaction(async (tx) => {
       await this.lockBotInstance(tx, botInstanceId);
       await tx.botRuntimeLease.updateMany({
@@ -1365,7 +1368,7 @@ export class PrismaAppRepository implements AppRepository {
           claimRequestId: null,
           leaseTokenHash: null,
           runtimeState: "STOPPED",
-          expiresAt: null,
+          ...(options.preserveExpiry === false ? { expiresAt: null } : {}),
           claimedTokenVersion: null,
           revokedAt: now,
         },

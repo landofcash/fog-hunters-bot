@@ -1,4 +1,5 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
+import { validate as isUuid } from "uuid";
 import { ApiError } from "../lib/errors";
 import { hashOpaqueToken, safeHashEquals } from "../modules/bots/bot-token-crypto";
 
@@ -29,7 +30,13 @@ export async function requireBotLease(request: FastifyRequest, _reply: FastifyRe
   const botInstanceId = Array.isArray(botHeader) ? botHeader[0] : botHeader;
   const generationValue = Array.isArray(generationHeader) ? generationHeader[0] : generationHeader;
   const leaseGeneration = Number(generationValue);
-  if (!token || !botInstanceId || !Number.isInteger(leaseGeneration) || leaseGeneration < 1) {
+  if (
+    !token
+    || !botInstanceId
+    || !isUuid(botInstanceId)
+    || !Number.isInteger(leaseGeneration)
+    || leaseGeneration < 1
+  ) {
     throw new ApiError(401, "BOT_LEASE_EXPIRED", "Bot lease credentials are required.");
   }
   const leaseTokenHash = hashOpaqueToken(token);
