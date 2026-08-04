@@ -12,7 +12,7 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api } from "@/api/client";
 import { queryClient } from "@/api/query";
-import type { BotInstallation, BotProfile, BotSummary } from "@/api/types";
+import type { BotInstallation } from "@/api/types";
 import { EmptyState, ErrorState, PageHeader } from "@/components/page";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,8 +23,15 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { LLM_PROMPT_MAX_LENGTH } from "@/lib/llm-limits";
+import {
+  botProfileDraftEquals,
+  reconcilePlatformBotDraft,
+  toBotProfileDraft,
+  type BotProfileDraft,
+  type PlatformBotDraft,
+} from "@/lib/platform-bot-draft";
 
-const emptyProfile: Omit<BotProfile, "id" | "botInstanceId" | "settingsVersion"> = {
+const emptyProfile: BotProfileDraft = {
   defaultModel: "gpt-4.1-mini",
   assistantPrompt: null,
   gatekeeperPrompt: null,
@@ -156,8 +163,13 @@ export function PlatformBotsPage() {
   const [selectedBotId, setSelectedBotId] = useState("");
   const [create, setCreate] = useState({ slug: "", displayName: "", discordApplicationId: "" });
   const [token, setToken] = useState("");
-  const [displayName, setDisplayName] = useState("");
-  const [profile, setProfile] = useState(emptyProfile);
+  const [draft, setDraft] = useState<PlatformBotDraft>({
+    botId: "",
+    displayName: "",
+    displayNameDirty: false,
+    profile: emptyProfile,
+    profileDirty: false,
+  });
   const selectBot = useCallback((botId: string) => {
     setToken("");
     setSelectedBotId(botId);
@@ -192,17 +204,7 @@ export function PlatformBotsPage() {
 
   useEffect(() => {
     if (!detail.data) return;
-    const value = detail.data.profile;
-    setDisplayName(detail.data.bot.displayName);
-    setProfile({
-      defaultModel: value.defaultModel,
-      assistantPrompt: value.assistantPrompt,
-      gatekeeperPrompt: value.gatekeeperPrompt,
-      dmEnabled: value.dmEnabled,
-      retentionDays: value.retentionDays,
-      maxInputChars: value.maxInputChars,
-      maxOutputTokens: value.maxOutputTokens,
-    });
+    setDraft((current) => reconcilePlatformBotDraft(current, detail.data));
   }, [detail.data]);
 
   const refresh = async (botId = selectedBotId) => {
@@ -223,9 +225,16 @@ export function PlatformBotsPage() {
     onError: (error) => toast.error(error.message),
   });
   const saveProfile = useMutation({
-    mutationFn: () => api.updateBotProfile(selectedBotId, profile),
-    onSuccess: async () => {
-      await refresh();
+    mutationFn: () => api.updateBotProfile(selectedBotId, draft.profile),
+    onSuccess: async ({ profile }) => {
+      setDraft((current) => current.botId === profile.botInstanceId
+        ? {
+            ...current,
+            profile: toBotProfileDraft(profile),
+            profileDirty: false,
+          }
+        : current);
+      await refresh(profile.botInstanceId);
       toast.success("Bot profile saved");
     },
     onError: (error) => toast.error(error.message),
@@ -250,13 +259,35 @@ export function PlatformBotsPage() {
   const updateBot = useMutation({
     mutationFn: (body: Parameters<typeof api.updateBot>[1]) =>
       api.updateBot(selectedBotId, body),
-    onSuccess: async () => {
-      await refresh();
+    onSuccess: async ({ bot }, variables) => {
+      if (variables.displayName !== undefined) {
+        setDraft((current) => current.botId === bot.id
+          ? {
+              ...current,
+              displayName: bot.displayName,
+              displayNameDirty: false,
+            }
+          : current);
+      }
+      await refresh(bot.id);
       toast.success("Bot updated");
     },
     onError: (error) => toast.error(error.message),
   });
   const selected = detail.data;
+  const updateProfileDraft = (changes: Partial<BotProfileDraft>) => {
+    const savedProfile = detail.data?.profile;
+    setDraft((current) => {
+      const profile = { ...current.profile, ...changes };
+      return {
+        ...current,
+        profile,
+        profileDirty: savedProfile
+          ? !botProfileDraftEquals(profile, savedProfile)
+          : true,
+      };
+    });
+  };
   return (
     <div className="space-y-7">
       <PageHeader
@@ -377,18 +408,26 @@ export function PlatformBotsPage() {
                 <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
                   <Input
                     aria-label="Bot display name"
-                    value={displayName}
-                    onChange={(event) => setDisplayName(event.target.value)}
+                    value={draft.displayName}
+                    onChange={(event) => {
+                      const displayName = event.target.value;
+                      setDraft((current) => ({
+                        ...current,
+                        displayName,
+                        displayNameDirty:
+                          displayName !== selected.bot.displayName,
+                      }));
+                    }}
                   />
                   <Button
                     variant="outline"
                     disabled={
-                      !displayName.trim() ||
-                      displayName === selected.bot.displayName ||
+                      !draft.displayName.trim() ||
+                      !draft.displayNameDirty ||
                       updateBot.isPending
                     }
                     onClick={() =>
-                      updateBot.mutate({ displayName: displayName.trim() })
+                      updateBot.mutate({ displayName: draft.displayName.trim() })
                     }
                   >
                     <Save className="size-4" />
@@ -430,15 +469,15 @@ export function PlatformBotsPage() {
                 <div className="grid gap-4 sm:grid-cols-3">
                   <div className="grid gap-2">
                     <Label>Default model</Label>
-                    <Input value={profile.defaultModel} onChange={(event) => setProfile({ ...profile, defaultModel: event.target.value })} />
+                    <Input value={draft.profile.defaultModel} onChange={(event) => updateProfileDraft({ defaultModel: event.target.value })} />
                   </div>
                   <div className="grid gap-2">
                     <Label>Retention days</Label>
-                    <Input type="number" value={profile.retentionDays} onChange={(event) => setProfile({ ...profile, retentionDays: Number(event.target.value) })} />
+                    <Input type="number" value={draft.profile.retentionDays} onChange={(event) => updateProfileDraft({ retentionDays: Number(event.target.value) })} />
                   </div>
                   <div className="grid gap-2">
                     <Label>DM responses</Label>
-                    <div className="flex h-9 items-center"><Switch checked={profile.dmEnabled} onCheckedChange={(dmEnabled) => setProfile({ ...profile, dmEnabled })} /></div>
+                    <div className="flex h-9 items-center"><Switch checked={draft.profile.dmEnabled} onCheckedChange={(dmEnabled) => updateProfileDraft({ dmEnabled })} /></div>
                   </div>
                 </div>
                 <div className="grid gap-4 sm:grid-cols-2">
@@ -446,9 +485,8 @@ export function PlatformBotsPage() {
                     <Label>Assistant prompt</Label>
                     <Textarea
                       maxLength={LLM_PROMPT_MAX_LENGTH}
-                      value={profile.assistantPrompt ?? ""}
-                      onChange={(event) => setProfile({
-                        ...profile,
+                      value={draft.profile.assistantPrompt ?? ""}
+                      onChange={(event) => updateProfileDraft({
                         assistantPrompt: event.target.value || null,
                       })}
                     />
@@ -457,9 +495,8 @@ export function PlatformBotsPage() {
                     <Label>Gatekeeper prompt</Label>
                     <Textarea
                       maxLength={LLM_PROMPT_MAX_LENGTH}
-                      value={profile.gatekeeperPrompt ?? ""}
-                      onChange={(event) => setProfile({
-                        ...profile,
+                      value={draft.profile.gatekeeperPrompt ?? ""}
+                      onChange={(event) => updateProfileDraft({
                         gatekeeperPrompt: event.target.value || null,
                       })}
                     />
@@ -468,14 +505,14 @@ export function PlatformBotsPage() {
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div className="grid gap-2">
                     <Label>Max input characters</Label>
-                    <Input type="number" value={profile.maxInputChars} onChange={(event) => setProfile({ ...profile, maxInputChars: Number(event.target.value) })} />
+                    <Input type="number" value={draft.profile.maxInputChars} onChange={(event) => updateProfileDraft({ maxInputChars: Number(event.target.value) })} />
                   </div>
                   <div className="grid gap-2">
                     <Label>Max output tokens</Label>
-                    <Input type="number" value={profile.maxOutputTokens} onChange={(event) => setProfile({ ...profile, maxOutputTokens: Number(event.target.value) })} />
+                    <Input type="number" value={draft.profile.maxOutputTokens} onChange={(event) => updateProfileDraft({ maxOutputTokens: Number(event.target.value) })} />
                   </div>
                 </div>
-                <Button onClick={() => saveProfile.mutate()} disabled={saveProfile.isPending}>
+                <Button onClick={() => saveProfile.mutate()} disabled={!draft.profileDirty || saveProfile.isPending}>
                   <Save className="size-4" /> Save profile
                 </Button>
               </CardContent>

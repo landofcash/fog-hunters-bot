@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { createHash } from "node:crypto";
+import { isSupportedLlmModel } from "../modules/llm/models";
 
 const optionalUrl = z.preprocess(
   (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
@@ -42,7 +43,10 @@ const envSchema = z.object({
     .optional()
     .transform((v) => v === "true"),
   LLM_PROVIDER: z.enum(["openai"]).default("openai"),
-  LLM_DEFAULT_MODEL: z.string().min(1).default("gpt-4.1-mini"),
+  LLM_DEFAULT_MODEL: z.string()
+    .min(1)
+    .refine(isSupportedLlmModel, "LLM_DEFAULT_MODEL must be a supported model.")
+    .default("gpt-4.1-mini"),
   OPENAI_API_KEY: z.string().optional(),
   LLM_MAX_INPUT_CHARS: z.coerce.number().int().positive().default(4000),
   LLM_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(512),

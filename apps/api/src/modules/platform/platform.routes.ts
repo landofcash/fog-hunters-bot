@@ -62,7 +62,10 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
 
     platformApp.post("/bots", { preHandler: [requireCsrf] }, async (request) => {
       const body = createBotBody.parse(request.body ?? {});
-      const result = await platformApp.repository.createBot(body);
+      const result = await platformApp.repository.createBot({
+        ...body,
+        defaultModel: platformApp.appConfig.llmDefaultModel,
+      });
       await platformApp.repository.createAuditLog({
         botInstanceId: result.bot.id,
         actorUserId: request.auth?.userId,

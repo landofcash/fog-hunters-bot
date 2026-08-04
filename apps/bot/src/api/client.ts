@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Logger } from "pino";
 import type { BotConfig } from "../config";
 import { ApiClientError } from "../runtime/errors";
@@ -233,23 +234,31 @@ export class ApiClient {
     discordEventId: string,
     eventType: "MESSAGE_CREATE" | "INTERACTION_CREATE",
   ): Promise<DiscordEventReceiptResponse> {
+    const acquisitionRequestId = randomUUID();
     return this.request("/internal/events/receipts", {
       method: "POST",
-      body: JSON.stringify({ discordEventId, eventType }),
+      body: JSON.stringify({ discordEventId, eventType, acquisitionRequestId }),
     });
   }
 
-  async completeEvent(receiptId: string): Promise<void> {
+  async completeEvent(
+    receiptId: string,
+    acquisitionRequestId: string,
+  ): Promise<void> {
     await this.request(`/internal/events/receipts/${receiptId}/complete`, {
       method: "POST",
-      body: "{}",
+      body: JSON.stringify({ acquisitionRequestId }),
     });
   }
 
-  async failEvent(receiptId: string, errorCode: string): Promise<void> {
+  async failEvent(
+    receiptId: string,
+    acquisitionRequestId: string,
+    errorCode: string,
+  ): Promise<void> {
     await this.request(`/internal/events/receipts/${receiptId}/fail`, {
       method: "POST",
-      body: JSON.stringify({ errorCode }),
+      body: JSON.stringify({ acquisitionRequestId, errorCode }),
     });
   }
 

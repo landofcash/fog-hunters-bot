@@ -295,6 +295,7 @@ export interface DiscordEventReceiptRecord {
   discordEventId: string;
   eventType: DiscordEventType;
   leaseGeneration: number;
+  acquisitionRequestId: string;
   processingStatus: DiscordEventProcessingStatus;
   attemptCount: number;
   lastErrorCode?: string | null;
@@ -325,7 +326,7 @@ export interface AppRepository {
   listGuildAdministrators(guildDiscordId: string): Promise<GuildMemberListItem[]>;
   updateGuildMemberRole(input: { guildDiscordId: string; targetUserId: string; role: TenantRole }): Promise<{ guild: GuildRecord; before: MembershipRecord; after: MembershipRecord } | null>;
 
-  createBot(input: { slug: string; displayName: string; discordApplicationId: string }): Promise<{ bot: BotInstanceRecord; profile: BotProfileRecord }>;
+  createBot(input: { slug: string; displayName: string; discordApplicationId: string; defaultModel: string }): Promise<{ bot: BotInstanceRecord; profile: BotProfileRecord }>;
   getBot(botInstanceId: string): Promise<BotInstanceRecord | null>;
   listBots(input: { limit: number; cursor?: string; search?: string }): Promise<CursorPage<BotInstanceRecord>>;
   updateBot(input: { botInstanceId: string; displayName?: string; desiredStatus?: BotDesiredStatus }): Promise<BotInstanceRecord>;
@@ -370,9 +371,9 @@ export interface AppRepository {
   validateRuntimeLease(input: { botInstanceId: string; leaseGeneration: number; leaseTokenHash: string; now: Date }): Promise<{ bot: BotInstanceRecord; lease: BotRuntimeLeaseRecord }>;
   revokeRuntimeLease(botInstanceId: string, now: Date): Promise<void>;
 
-  acquireDiscordEvent(input: { botInstanceId: string; discordEventId: string; eventType: DiscordEventType; leaseGeneration: number; now: Date; expiresAt: Date; staleBefore: Date; maxAttempts: number }): Promise<{ receipt: DiscordEventReceiptRecord; acquired: boolean }>;
-  completeDiscordEvent(input: { receiptId: string; botInstanceId: string; leaseGeneration: number }): Promise<void>;
-  failDiscordEvent(input: { receiptId: string; botInstanceId: string; leaseGeneration: number; errorCode: string }): Promise<void>;
+  acquireDiscordEvent(input: { botInstanceId: string; discordEventId: string; eventType: DiscordEventType; leaseGeneration: number; acquisitionRequestId: string; now: Date; expiresAt: Date; staleBefore: Date; maxAttempts: number }): Promise<{ receipt: DiscordEventReceiptRecord; acquired: boolean }>;
+  completeDiscordEvent(input: { receiptId: string; botInstanceId: string; leaseGeneration: number; acquisitionRequestId: string }): Promise<void>;
+  failDiscordEvent(input: { receiptId: string; botInstanceId: string; leaseGeneration: number; acquisitionRequestId: string; errorCode: string }): Promise<void>;
   purgeExpiredDiscordEventReceipts(now: Date, limit: number): Promise<number>;
 
   createAuditLog(input: { guildId?: string; botInstanceId?: string; botInstallationId?: string; actorUserId?: string; actorType: AuditActorType; action: string; entityType: string; entityId: string; before?: Record<string, unknown> | null; after?: Record<string, unknown> | null; metadata?: Record<string, unknown> }): Promise<AuditLogRecord>;

@@ -6,6 +6,8 @@ import type { AppRepository } from "../../repositories/types";
 interface FeatureUpdateJobData {
   jobRunId: string;
   guildDiscordId: string;
+  botInstanceId: string;
+  botInstallationId: string;
   featureKey: string;
   actorUserId: string;
 }
@@ -169,11 +171,15 @@ export class JobsService {
 
   async enqueueFeatureUpdate(input: {
     guildDiscordId: string;
+    botInstanceId: string;
+    botInstallationId: string;
     featureKey: string;
     actorUserId: string;
   }): Promise<void> {
     const run = await this.repository.createJobRun({
       guildDiscordId: input.guildDiscordId,
+      botInstanceId: input.botInstanceId,
+      botInstallationId: input.botInstallationId,
       jobType: FEATURE_UPDATE_JOB,
       payload: input,
     });
@@ -193,6 +199,8 @@ export class JobsService {
       {
         jobRunId: run.id,
         guildDiscordId: input.guildDiscordId,
+        botInstanceId: input.botInstanceId,
+        botInstallationId: input.botInstallationId,
         featureKey: input.featureKey,
         actorUserId: input.actorUserId,
       } satisfies FeatureUpdateJobData,

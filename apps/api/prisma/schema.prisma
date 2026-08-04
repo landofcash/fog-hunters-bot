@@ -528,18 +528,19 @@ model WebhookDelivery {
 }
 
 model DiscordEventReceipt {
-  id               String                       @id(map: "pk_discord_event_receipts") @db.Uuid
-  botInstanceId    String                       @map("bot_instance_id") @db.Uuid
-  discordEventId   String                       @map("discord_event_id")
-  eventType        DiscordEventType             @map("event_type")
-  leaseGeneration  Int                          @map("lease_generation")
-  processingStatus DiscordEventProcessingStatus @default(RECEIVED) @map("processing_status")
-  attemptCount     Int                          @default(1) @map("attempt_count")
-  lastErrorCode    String?                      @map("last_error_code")
-  expiresAt        DateTime                     @map("expires_at") @db.Timestamptz(6)
-  createdAt        DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  botInstance      BotInstance                  @relation(fields: [botInstanceId], references: [id], onDelete: Cascade, map: "fk_discord_event_receipts_bot_instances")
+  id                   String                       @id(map: "pk_discord_event_receipts") @db.Uuid
+  botInstanceId        String                       @map("bot_instance_id") @db.Uuid
+  discordEventId       String                       @map("discord_event_id")
+  eventType            DiscordEventType             @map("event_type")
+  leaseGeneration      Int                          @map("lease_generation")
+  acquisitionRequestId String                       @map("acquisition_request_id") @db.Uuid
+  processingStatus     DiscordEventProcessingStatus @default(RECEIVED) @map("processing_status")
+  attemptCount         Int                          @default(1) @map("attempt_count")
+  lastErrorCode        String?                      @map("last_error_code")
+  expiresAt            DateTime                     @map("expires_at") @db.Timestamptz(6)
+  createdAt            DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  botInstance          BotInstance                  @relation(fields: [botInstanceId], references: [id], onDelete: Cascade, map: "fk_discord_event_receipts_bot_instances")
 
   @@unique([botInstanceId, discordEventId, eventType], map: "ux_discord_event_receipts_bot_event_type")
   @@index([expiresAt], map: "ix_discord_event_receipts_expiry")

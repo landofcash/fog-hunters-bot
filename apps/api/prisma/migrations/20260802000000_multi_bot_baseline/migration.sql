@@ -423,6 +423,7 @@ CREATE TABLE "discord_event_receipts" (
     "discord_event_id" TEXT NOT NULL,
     "event_type" "discord_event_type" NOT NULL,
     "lease_generation" INTEGER NOT NULL,
+    "acquisition_request_id" UUID NOT NULL,
     "processing_status" "discord_event_processing_status" NOT NULL DEFAULT 'RECEIVED',
     "attempt_count" INTEGER NOT NULL DEFAULT 1,
     "last_error_code" TEXT,

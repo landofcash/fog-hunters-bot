@@ -42,6 +42,12 @@ function wasBotMentioned(message: Message): boolean {
   return botUserId ? message.mentions.has(botUserId) : false;
 }
 
+function compareDiscordSnowflakes(left: Message, right: Message): number {
+  const leftId = BigInt(left.id);
+  const rightId = BigInt(right.id);
+  return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+}
+
 async function processMessageBatch(input: {
   messages: Message[];
   apiClient: ApiClient;
@@ -242,7 +248,7 @@ export class MessageResponseBuffer {
     clearTimeout(batch.maxWaitTimer);
     try {
       await processMessageBatch({
-        messages: batch.messages,
+        messages: [...batch.messages].sort(compareDiscordSnowflakes),
         apiClient: this.apiClient,
         logger: this.logger,
         canProcess: this.canProcess,

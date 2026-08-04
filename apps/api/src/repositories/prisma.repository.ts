@@ -274,6 +274,7 @@ function mapReceipt(row: any): DiscordEventReceiptRecord {
     discordEventId: row.discordEventId,
     eventType: row.eventType,
     leaseGeneration: row.leaseGeneration,
+    acquisitionRequestId: row.acquisitionRequestId,
     processingStatus: row.processingStatus,
     attemptCount: row.attemptCount,
     lastErrorCode: row.lastErrorCode,
@@ -322,6 +323,13 @@ function mapJob(row: any): JobRunRecord {
 
 export class PrismaAppRepository implements AppRepository {
   constructor(private readonly prisma: PrismaClient) {}
+
+  private async lockBotInstance(
+    tx: Prisma.TransactionClient,
+    botInstanceId: string,
+  ): Promise<void> {
+    await tx.$queryRaw`SELECT id FROM bot_instances WHERE id = ${botInstanceId}::uuid FOR UPDATE`;
+  }
 
   private async resolveInstallation(botInstanceId: string, guildDiscordId: string, client: any = this.prisma): Promise<any> {
     const installation = await client.botInstallation.findFirst({
@@ -459,29 +467,36 @@ export class PrismaAppRepository implements AppRepository {
   }
 
   async updateGuildMemberRole(input: { guildDiscordId: string; targetUserId: string; role: TenantRole }): Promise<{ guild: GuildRecord; before: MembershipRecord; after: MembershipRecord } | null> {
-    return this.prisma.$transaction(async (tx) => {
-      const row = await tx.guildMember.findFirst({
-        where: { userId: input.targetUserId, guild: { discordGuildId: input.guildDiscordId } },
-        include: { guild: true },
-      });
-      if (!row) return null;
-      if (row.tenantRole === "OWNER" && input.role !== "OWNER") {
-        const owners = await tx.guildMember.count({
-          where: { guildId: row.guildId, tenantRole: "OWNER", status: "ACTIVE" },
-        });
-        if (owners <= 1) {
-          throw new ApiError(409, "LAST_OWNER_PROTECTED", "The last guild owner cannot be demoted.");
-        }
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(async (tx) => {
+          const row = await tx.guildMember.findFirst({
+            where: { userId: input.targetUserId, guild: { discordGuildId: input.guildDiscordId } },
+            include: { guild: true },
+          });
+          if (!row) return null;
+          if (row.tenantRole === "OWNER" && input.role !== "OWNER") {
+            const owners = await tx.guildMember.count({
+              where: { guildId: row.guildId, tenantRole: "OWNER", status: "ACTIVE" },
+            });
+            if (owners <= 1) {
+              throw new ApiError(409, "LAST_OWNER_PROTECTED", "The last guild owner cannot be demoted.");
+            }
+          }
+          const updated = await tx.guildMember.update({
+            where: { guildId_userId: { guildId: row.guildId, userId: row.userId } },
+            data: { tenantRole: input.role, status: "ACTIVE" },
+          });
+          return { guild: mapGuild(row.guild), before: mapMembership(row), after: mapMembership(updated) };
+        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      } catch (error) {
+        if (attempt >= 2 || !isRetryableTransactionError(error)) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
       }
-      const updated = await tx.guildMember.update({
-        where: { guildId_userId: { guildId: row.guildId, userId: row.userId } },
-        data: { tenantRole: input.role, status: "ACTIVE" },
-      });
-      return { guild: mapGuild(row.guild), before: mapMembership(row), after: mapMembership(updated) };
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    }
   }
 
-  async createBot(input: { slug: string; displayName: string; discordApplicationId: string }): Promise<{ bot: BotInstanceRecord; profile: BotProfileRecord }> {
+  async createBot(input: { slug: string; displayName: string; discordApplicationId: string; defaultModel: string }): Promise<{ bot: BotInstanceRecord; profile: BotProfileRecord }> {
     return this.prisma.$transaction(async (tx) => {
       const bot = await tx.botInstance.create({
         data: {
@@ -492,7 +507,11 @@ export class PrismaAppRepository implements AppRepository {
         },
       });
       const profile = await tx.botProfile.create({
-        data: { id: generateId(), botInstanceId: bot.id },
+        data: {
+          id: generateId(),
+          botInstanceId: bot.id,
+          defaultModel: input.defaultModel,
+        },
       });
       await tx.botRuntimeLease.create({
         data: { id: generateId(), botInstanceId: bot.id },
@@ -533,20 +552,36 @@ export class PrismaAppRepository implements AppRepository {
   }
 
   async updateBot(input: { botInstanceId: string; displayName?: string; desiredStatus?: "DRAFT" | "ACTIVE" | "DISABLED" }): Promise<BotInstanceRecord> {
+    if (input.desiredStatus === "ACTIVE") {
+      return this.prisma.$transaction(async (tx) => {
+        await this.lockBotInstance(tx, input.botInstanceId);
+        const current = await tx.botInstance.findUnique({
+          where: { id: input.botInstanceId },
+          include: { tokenSecret: { select: { id: true } } },
+        });
+        if (!current) throw new ApiError(404, "BOT_NOT_FOUND", "Bot not found.");
+        if (!current.tokenSecret) {
+          throw new ApiError(409, "BOT_TOKEN_NOT_CONFIGURED", "Configure a token before activating the bot.");
+        }
+        const updated = await tx.botInstance.update({
+          where: { id: input.botInstanceId },
+          data: { displayName: input.displayName, desiredStatus: "ACTIVE" },
+          include: { tokenSecret: { select: { id: true } } },
+        });
+        return mapBot(updated);
+      });
+    }
+
     const current = await this.prisma.botInstance.findUnique({
       where: { id: input.botInstanceId },
-      include: { tokenSecret: true },
     });
     if (!current) throw new ApiError(404, "BOT_NOT_FOUND", "Bot not found.");
-    if (input.desiredStatus === "ACTIVE" && !current.tokenSecret) {
-      throw new ApiError(409, "BOT_TOKEN_NOT_CONFIGURED", "Configure a token before activating the bot.");
-    }
     const row = await this.prisma.botInstance.update({
       where: { id: input.botInstanceId },
       data: { displayName: input.displayName, desiredStatus: input.desiredStatus },
       include: { tokenSecret: { select: { id: true } } },
     });
-    if (input.desiredStatus && input.desiredStatus !== "ACTIVE") {
+    if (input.desiredStatus) {
       await this.revokeRuntimeLease(input.botInstanceId, new Date());
     }
     return mapBot(row);
@@ -599,7 +634,7 @@ export class PrismaAppRepository implements AppRepository {
 
   async configureBotToken(input: BotTokenSecretRecord & { rotatedByUserId?: string }): Promise<BotInstanceRecord> {
     return this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM bot_instances WHERE id = ${input.botInstanceId}::uuid FOR UPDATE`;
+      await this.lockBotInstance(tx, input.botInstanceId);
       const bot = await tx.botInstance.findUnique({ where: { id: input.botInstanceId } });
       if (!bot) throw new ApiError(404, "BOT_NOT_FOUND", "Bot not found.");
       await tx.botTokenSecret.upsert({
@@ -628,11 +663,6 @@ export class PrismaAppRepository implements AppRepository {
         data: {
           revokedAt: new Date(),
           runtimeState: "STOPPED",
-          runtimeInstanceId: null,
-          claimRequestId: null,
-          leaseTokenHash: null,
-          expiresAt: null,
-          claimedTokenVersion: null,
         },
       });
       const updated = await tx.botInstance.update({
@@ -646,7 +676,7 @@ export class PrismaAppRepository implements AppRepository {
 
   async deleteBotToken(botInstanceId: string): Promise<BotInstanceRecord> {
     return this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM bot_instances WHERE id = ${botInstanceId}::uuid FOR UPDATE`;
+      await this.lockBotInstance(tx, botInstanceId);
       await tx.botTokenSecret.deleteMany({ where: { botInstanceId } });
       await tx.botRuntimeLease.update({
         where: { botInstanceId },
@@ -1191,7 +1221,7 @@ export class PrismaAppRepository implements AppRepository {
 
   async claimRuntime(input: { botInstanceId: string; runtimeInstanceId: string; claimRequestId: string; leaseToken: string; leaseTokenHash: string; now: Date; expiresAt: Date }): Promise<RuntimeClaimRecord> {
     return this.prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM bot_instances WHERE id = ${input.botInstanceId}::uuid FOR UPDATE`;
+      await this.lockBotInstance(tx, input.botInstanceId);
       const bot = await tx.botInstance.findUnique({
         where: { id: input.botInstanceId },
         include: { tokenSecret: true, profile: true, runtimeLease: true },
@@ -1202,11 +1232,21 @@ export class PrismaAppRepository implements AppRepository {
       if (!bot.profile || !bot.runtimeLease) throw new ApiError(409, "BOT_NOT_READY", "Bot records are incomplete.");
 
       const lease = bot.runtimeLease;
+      const withinLeaseWindow = Boolean(
+        lease.expiresAt
+        && lease.expiresAt > input.now,
+      );
+      if (lease.revokedAt && withinLeaseWindow) {
+        throw new ApiError(
+          409,
+          "BOT_LEASE_CONFLICT",
+          "The revoked runtime is still within its fencing window.",
+        );
+      }
       const active = Boolean(
         lease.runtimeInstanceId
         && !lease.revokedAt
-        && lease.expiresAt
-        && lease.expiresAt > input.now,
+        && withinLeaseWindow,
       );
       let generation = lease.leaseGeneration;
       if (active) {
@@ -1258,8 +1298,10 @@ export class PrismaAppRepository implements AppRepository {
 
   async heartbeatRuntime(input: { botInstanceId: string; leaseGeneration: number; leaseTokenHash: string; now: Date; expiresAt: Date; runtimeState?: BotRuntimeState; connectedAt?: Date; errorCode?: string | null }): Promise<BotRuntimeLeaseRecord> {
     return this.prisma.$transaction(async (tx) => {
+      await this.lockBotInstance(tx, input.botInstanceId);
       const bot = await tx.botInstance.findUnique({ where: { id: input.botInstanceId }, include: { runtimeLease: true } });
       if (!bot?.runtimeLease) throw new ApiError(404, "BOT_NOT_FOUND", "Bot not found.");
+      if (bot.desiredStatus !== "ACTIVE") throw new ApiError(401, "BOT_DISABLED", "Bot is not active.");
       this.assertLease(bot.runtimeLease, input, bot.tokenVersion);
       const row = await tx.botRuntimeLease.update({
         where: { botInstanceId: input.botInstanceId },
@@ -1278,9 +1320,11 @@ export class PrismaAppRepository implements AppRepository {
 
   async releaseRuntime(input: { botInstanceId: string; leaseGeneration: number; leaseTokenHash: string; now: Date }): Promise<BotRuntimeLeaseRecord> {
     return this.prisma.$transaction(async (tx) => {
-      const row = await tx.botRuntimeLease.findUnique({ where: { botInstanceId: input.botInstanceId } });
-      if (!row) throw new ApiError(404, "BOT_NOT_FOUND", "Bot not found.");
-      this.assertLease(row, input);
+      await this.lockBotInstance(tx, input.botInstanceId);
+      const bot = await tx.botInstance.findUnique({ where: { id: input.botInstanceId }, include: { runtimeLease: true } });
+      if (!bot?.runtimeLease) throw new ApiError(404, "BOT_NOT_FOUND", "Bot not found.");
+      if (bot.desiredStatus !== "ACTIVE") throw new ApiError(401, "BOT_DISABLED", "Bot is not active.");
+      this.assertLease(bot.runtimeLease, input, bot.tokenVersion);
       const released = await tx.botRuntimeLease.update({
         where: { botInstanceId: input.botInstanceId },
         data: {
@@ -1312,21 +1356,24 @@ export class PrismaAppRepository implements AppRepository {
   }
 
   async revokeRuntimeLease(botInstanceId: string, now: Date): Promise<void> {
-    await this.prisma.botRuntimeLease.updateMany({
-      where: { botInstanceId },
-      data: {
-        runtimeInstanceId: null,
-        claimRequestId: null,
-        leaseTokenHash: null,
-        runtimeState: "STOPPED",
-        expiresAt: null,
-        claimedTokenVersion: null,
-        revokedAt: now,
-      },
+    await this.prisma.$transaction(async (tx) => {
+      await this.lockBotInstance(tx, botInstanceId);
+      await tx.botRuntimeLease.updateMany({
+        where: { botInstanceId },
+        data: {
+          runtimeInstanceId: null,
+          claimRequestId: null,
+          leaseTokenHash: null,
+          runtimeState: "STOPPED",
+          expiresAt: null,
+          claimedTokenVersion: null,
+          revokedAt: now,
+        },
+      });
     });
   }
 
-  async acquireDiscordEvent(input: { botInstanceId: string; discordEventId: string; eventType: "MESSAGE_CREATE" | "INTERACTION_CREATE"; leaseGeneration: number; now: Date; expiresAt: Date; staleBefore: Date; maxAttempts: number }): Promise<{ receipt: DiscordEventReceiptRecord; acquired: boolean }> {
+  async acquireDiscordEvent(input: { botInstanceId: string; discordEventId: string; eventType: "MESSAGE_CREATE" | "INTERACTION_CREATE"; leaseGeneration: number; acquisitionRequestId: string; now: Date; expiresAt: Date; staleBefore: Date; maxAttempts: number }): Promise<{ receipt: DiscordEventReceiptRecord; acquired: boolean }> {
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.discordEventReceipt.findUnique({
         where: { botInstanceId_discordEventId_eventType: {
@@ -1343,6 +1390,7 @@ export class PrismaAppRepository implements AppRepository {
             discordEventId: input.discordEventId,
             eventType: input.eventType,
             leaseGeneration: input.leaseGeneration,
+            acquisitionRequestId: input.acquisitionRequestId,
             processingStatus: "PROCESSING",
             expiresAt: input.expiresAt,
           },
@@ -1350,6 +1398,13 @@ export class PrismaAppRepository implements AppRepository {
         return { receipt: mapReceipt(created), acquired: true };
       }
       if (existing.processingStatus === "COMPLETED") return { receipt: mapReceipt(existing), acquired: false };
+      if (
+        existing.processingStatus === "PROCESSING"
+        && existing.leaseGeneration === input.leaseGeneration
+        && existing.acquisitionRequestId === input.acquisitionRequestId
+      ) {
+        return { receipt: mapReceipt(existing), acquired: true };
+      }
       if (existing.processingStatus === "PROCESSING" && existing.updatedAt > input.staleBefore) {
         return { receipt: mapReceipt(existing), acquired: false };
       }
@@ -1360,6 +1415,7 @@ export class PrismaAppRepository implements AppRepository {
           processingStatus: "PROCESSING",
           attemptCount: { increment: 1 },
           leaseGeneration: input.leaseGeneration,
+          acquisitionRequestId: input.acquisitionRequestId,
           expiresAt: input.expiresAt,
           lastErrorCode: null,
         },
@@ -1368,19 +1424,60 @@ export class PrismaAppRepository implements AppRepository {
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
-  async completeDiscordEvent(input: { receiptId: string; botInstanceId: string; leaseGeneration: number }): Promise<void> {
+  async completeDiscordEvent(input: { receiptId: string; botInstanceId: string; leaseGeneration: number; acquisitionRequestId: string }): Promise<void> {
     const result = await this.prisma.discordEventReceipt.updateMany({
-      where: { id: input.receiptId, botInstanceId: input.botInstanceId, leaseGeneration: input.leaseGeneration, processingStatus: "PROCESSING" },
+      where: {
+        id: input.receiptId,
+        botInstanceId: input.botInstanceId,
+        leaseGeneration: input.leaseGeneration,
+        acquisitionRequestId: input.acquisitionRequestId,
+        processingStatus: "PROCESSING",
+      },
       data: { processingStatus: "COMPLETED" },
     });
-    if (result.count !== 1) throw new ApiError(409, "BOT_LEASE_GENERATION_MISMATCH", "Event receipt is owned by another lease generation.");
+    if (result.count === 1) return;
+
+    const existing = await this.prisma.discordEventReceipt.findUnique({
+      where: { id: input.receiptId },
+    });
+    if (
+      existing?.botInstanceId === input.botInstanceId
+      && existing.leaseGeneration === input.leaseGeneration
+      && existing.acquisitionRequestId === input.acquisitionRequestId
+      && existing.processingStatus === "COMPLETED"
+    ) {
+      return;
+    }
+    throw new ApiError(409, "EVENT_RECEIPT_OWNERSHIP_MISMATCH", "Event receipt is not owned by this processing attempt.");
   }
 
-  async failDiscordEvent(input: { receiptId: string; botInstanceId: string; leaseGeneration: number; errorCode: string }): Promise<void> {
-    await this.prisma.discordEventReceipt.updateMany({
-      where: { id: input.receiptId, botInstanceId: input.botInstanceId, leaseGeneration: input.leaseGeneration },
+  async failDiscordEvent(input: { receiptId: string; botInstanceId: string; leaseGeneration: number; acquisitionRequestId: string; errorCode: string }): Promise<void> {
+    const result = await this.prisma.discordEventReceipt.updateMany({
+      where: {
+        id: input.receiptId,
+        botInstanceId: input.botInstanceId,
+        leaseGeneration: input.leaseGeneration,
+        acquisitionRequestId: input.acquisitionRequestId,
+        processingStatus: "PROCESSING",
+      },
       data: { processingStatus: "FAILED", lastErrorCode: input.errorCode },
     });
+    if (result.count === 1) return;
+
+    const existing = await this.prisma.discordEventReceipt.findUnique({
+      where: { id: input.receiptId },
+    });
+    if (
+      existing?.botInstanceId === input.botInstanceId
+      && existing.leaseGeneration === input.leaseGeneration
+      && existing.acquisitionRequestId === input.acquisitionRequestId
+    ) {
+      if (existing.processingStatus === "FAILED") return;
+      if (existing.processingStatus === "COMPLETED") {
+        throw new ApiError(409, "EVENT_RECEIPT_ALREADY_COMPLETED", "A completed event receipt cannot be marked as failed.");
+      }
+    }
+    throw new ApiError(409, "EVENT_RECEIPT_OWNERSHIP_MISMATCH", "Event receipt is not owned by this processing attempt.");
   }
 
   async purgeExpiredDiscordEventReceipts(now: Date, limit: number): Promise<number> {
@@ -1659,13 +1756,18 @@ export class PrismaAppRepository implements AppRepository {
         ?? 90;
       return conversation.lastMessageAt < new Date(now.getTime() - retention * 86_400_000);
     }).map((conversation) => conversation.id);
-    if (expiredIds.length === 0) {
-      return { deletedMessages: 0, deletedGenerations: 0, deletedModerationEvents: 0, deletedConversations: 0 };
-    }
+    const moderationCutoff = new Date(now.getTime() - 90 * 86_400_000);
     const [deletedMessages, deletedGenerations, deletedModerationEvents, deletedConversations] = await this.prisma.$transaction([
       this.prisma.llmMessage.count({ where: { conversationId: { in: expiredIds } } }),
       this.prisma.llmGeneration.count({ where: { conversationId: { in: expiredIds } } }),
-      this.prisma.llmModerationEvent.deleteMany({ where: { conversationId: { in: expiredIds } } }),
+      this.prisma.llmModerationEvent.deleteMany({
+        where: {
+          OR: [
+            { conversationId: { in: expiredIds } },
+            { createdAt: { lt: moderationCutoff } },
+          ],
+        },
+      }),
       this.prisma.llmConversation.deleteMany({ where: { id: { in: expiredIds } } }),
     ]);
     return {

@@ -19,6 +19,7 @@ async function createBot(slug: string, applicationId: string) {
     slug,
     displayName: `Bot ${slug}`,
     discordApplicationId: applicationId,
+    defaultModel: "gpt-4.1-mini",
   });
 }
 
@@ -30,6 +31,82 @@ async function expectApiCode(promise: Promise<unknown>, code: string) {
     expect(isApiError(error)).toBe(true);
     if (isApiError(error)) expect(error.code).toBe(code);
   }
+}
+
+async function waitForBotInstanceLockWait(timeoutMs = 2_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const [row] = await prisma.$queryRaw<Array<{ waiting: boolean }>>`
+      SELECT EXISTS (
+        SELECT 1
+        FROM pg_stat_activity
+        WHERE datname = current_database()
+          AND pid <> pg_backend_pid()
+          AND wait_event_type = 'Lock'
+          AND query LIKE '%FROM bot_instances%FOR UPDATE%'
+      ) AS waiting
+    `;
+    if (row?.waiting) return true;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return false;
+}
+
+async function waitForBotInstanceLockWaiters(expected: number, timeoutMs = 2_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const [row] = await prisma.$queryRaw<Array<{ waiting: number }>>`
+      SELECT COUNT(*)::int AS waiting
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND pid <> pg_backend_pid()
+        AND wait_event_type = 'Lock'
+        AND query LIKE '%bot_instances%'
+    `;
+    if ((row?.waiting ?? 0) >= expected) return true;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return false;
+}
+
+async function stageReplacementLease(input: {
+  botInstanceId: string;
+  leaseGeneration: number;
+  claimedTokenVersion: number;
+  now: Date;
+}) {
+  let signalLocked!: () => void;
+  let allowReplacement!: () => void;
+  const locked = new Promise<void>((resolve) => {
+    signalLocked = resolve;
+  });
+  const canReplace = new Promise<void>((resolve) => {
+    allowReplacement = resolve;
+  });
+  const replacement = prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM bot_instances WHERE id = ${input.botInstanceId}::uuid FOR UPDATE`;
+    signalLocked();
+    await canReplace;
+    return tx.botRuntimeLease.update({
+      where: { botInstanceId: input.botInstanceId },
+      data: {
+        runtimeInstanceId: "replacement-runtime",
+        claimRequestId: "99999999-9999-4999-8999-999999999999",
+        leaseGeneration: input.leaseGeneration + 1,
+        leaseTokenHash: "replacement-hash",
+        runtimeState: "CLAIMED",
+        expiresAt: new Date(input.now.getTime() + 120_000),
+        lastHeartbeatAt: input.now,
+        claimedTokenVersion: input.claimedTokenVersion,
+        revokedAt: null,
+      },
+    });
+  });
+  await locked;
+  return {
+    commitReplacement: allowReplacement,
+    replacement,
+  };
 }
 
 beforeEach(async () => {
@@ -165,7 +242,7 @@ describe("multi-bot repository", () => {
     ).rejects.toThrow();
   });
 
-  it("fences leases, supports claim recovery, and revokes on token rotation", async () => {
+  it("fences leases, supports claim recovery, and delays replacement after token rotation", async () => {
     const { bot } = await createBot("lease-bot", "application-lease");
     await repository.configureBotToken({
       botInstanceId: bot.id,
@@ -252,6 +329,211 @@ describe("multi-bot repository", () => {
       }),
       "BOT_LEASE_REVOKED",
     );
+
+    const revokedLease = await repository.getRuntimeLease(bot.id);
+    expect(revokedLease).toMatchObject({
+      runtimeInstanceId: "runtime-a",
+      claimRequestId: "11111111-1111-4111-8111-111111111111",
+      leaseGeneration: recovery.lease.leaseGeneration,
+      runtimeState: "STOPPED",
+      expiresAt: new Date(now.getTime() + 61_000),
+      claimedTokenVersion: recovery.bot.tokenVersion,
+    });
+    expect(revokedLease?.revokedAt).toBeInstanceOf(Date);
+
+    await expectApiCode(
+      repository.claimRuntime({
+        botInstanceId: bot.id,
+        runtimeInstanceId: "runtime-b",
+        claimRequestId: "44444444-4444-4444-8444-444444444444",
+        leaseToken: "lease-three",
+        leaseTokenHash: "hash-three",
+        now: new Date(now.getTime() + 60_999),
+        expiresAt: new Date(now.getTime() + 120_999),
+      }),
+      "BOT_LEASE_CONFLICT",
+    );
+
+    const replacement = await repository.claimRuntime({
+      botInstanceId: bot.id,
+      runtimeInstanceId: "runtime-b",
+      claimRequestId: "44444444-4444-4444-8444-444444444444",
+      leaseToken: "lease-three",
+      leaseTokenHash: "hash-three",
+      now: new Date(now.getTime() + 61_000),
+      expiresAt: new Date(now.getTime() + 121_000),
+    });
+    expect(replacement.lease).toMatchObject({
+      runtimeInstanceId: "runtime-b",
+      leaseGeneration: recovery.lease.leaseGeneration + 1,
+      runtimeState: "CLAIMED",
+      claimedTokenVersion: recovery.bot.tokenVersion + 1,
+      revokedAt: null,
+    });
+  });
+
+  it("serializes activation with token deletion", async () => {
+    const { bot } = await createBot("activation-race", "application-activation-race");
+    await repository.configureBotToken({
+      botInstanceId: bot.id,
+      ciphertext: Buffer.from("activation-race-ciphertext"),
+      nonce: Buffer.alloc(12, 1),
+      authenticationTag: Buffer.alloc(16, 2),
+      encryptionKeyVersion: 1,
+      rotatedAt: new Date(),
+    });
+
+    let signalLocked!: () => void;
+    let releaseLock!: () => void;
+    const locked = new Promise<void>((resolve) => {
+      signalLocked = resolve;
+    });
+    const canRelease = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    const blocker = prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM bot_instances WHERE id = ${bot.id}::uuid FOR UPDATE`;
+      signalLocked();
+      await canRelease;
+    });
+    await locked;
+
+    const deletion = repository.deleteBotToken(bot.id);
+    const deletionWaited = await waitForBotInstanceLockWaiters(1);
+    const activation = repository.updateBot({
+      botInstanceId: bot.id,
+      desiredStatus: "ACTIVE",
+    }).then(
+      (value) => ({ status: "fulfilled" as const, value }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+    const activationWaited = await waitForBotInstanceLockWaiters(2);
+
+    releaseLock();
+    await blocker;
+    await deletion;
+    const outcome = await activation;
+
+    expect(deletionWaited).toBe(true);
+    expect(activationWaited).toBe(true);
+    expect(outcome.status).toBe("rejected");
+    if (outcome.status === "rejected") {
+      expect(isApiError(outcome.error)).toBe(true);
+      if (isApiError(outcome.error)) {
+        expect(outcome.error.code).toBe("BOT_TOKEN_NOT_CONFIGURED");
+      }
+    }
+    expect(await repository.getBot(bot.id)).toMatchObject({
+      desiredStatus: "DRAFT",
+      tokenConfigured: false,
+    });
+  });
+
+  it("serializes heartbeat and release with replacement lease ownership", async () => {
+    const now = new Date();
+    const createClaimedBot = async (suffix: string) => {
+      const { bot } = await createBot(`lease-race-${suffix}`, `application-lease-race-${suffix}`);
+      await repository.configureBotToken({
+        botInstanceId: bot.id,
+        ciphertext: Buffer.from(`ciphertext-${suffix}`),
+        nonce: Buffer.alloc(12, 1),
+        authenticationTag: Buffer.alloc(16, 2),
+        encryptionKeyVersion: 1,
+        rotatedAt: now,
+      });
+      await repository.updateBot({
+        botInstanceId: bot.id,
+        desiredStatus: "ACTIVE",
+      });
+      const claim = await repository.claimRuntime({
+        botInstanceId: bot.id,
+        runtimeInstanceId: `runtime-${suffix}`,
+        claimRequestId: randomUUID(),
+        leaseToken: `lease-${suffix}`,
+        leaseTokenHash: `hash-${suffix}`,
+        now,
+        expiresAt: new Date(now.getTime() + 60_000),
+      });
+      return { bot, claim };
+    };
+
+    const heartbeatLease = await createClaimedBot("heartbeat");
+    const heartbeatReplacement = await stageReplacementLease({
+      botInstanceId: heartbeatLease.bot.id,
+      leaseGeneration: heartbeatLease.claim.lease.leaseGeneration,
+      claimedTokenVersion: heartbeatLease.claim.bot.tokenVersion,
+      now: new Date(now.getTime() + 2_000),
+    });
+    const heartbeatOutcome = repository.heartbeatRuntime({
+      botInstanceId: heartbeatLease.bot.id,
+      leaseGeneration: heartbeatLease.claim.lease.leaseGeneration,
+      leaseTokenHash: "hash-heartbeat",
+      now: new Date(now.getTime() + 1_000),
+      expiresAt: new Date(now.getTime() + 61_000),
+      runtimeState: "READY",
+    }).then(
+      (value) => ({ status: "fulfilled" as const, value }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+    const heartbeatWaited = await waitForBotInstanceLockWait();
+    heartbeatReplacement.commitReplacement();
+    await heartbeatReplacement.replacement;
+    const heartbeatResult = await heartbeatOutcome;
+
+    expect(heartbeatWaited).toBe(true);
+    expect(heartbeatResult.status).toBe("rejected");
+    if (heartbeatResult.status === "rejected") {
+      expect(isApiError(heartbeatResult.error)).toBe(true);
+      if (isApiError(heartbeatResult.error)) {
+        expect(heartbeatResult.error.code).toBe("BOT_LEASE_GENERATION_MISMATCH");
+      }
+    }
+    expect(await prisma.botRuntimeLease.findUnique({
+      where: { botInstanceId: heartbeatLease.bot.id },
+    })).toMatchObject({
+      runtimeInstanceId: "replacement-runtime",
+      leaseGeneration: heartbeatLease.claim.lease.leaseGeneration + 1,
+      leaseTokenHash: "replacement-hash",
+      runtimeState: "CLAIMED",
+    });
+
+    const releaseLease = await createClaimedBot("release");
+    const releaseReplacement = await stageReplacementLease({
+      botInstanceId: releaseLease.bot.id,
+      leaseGeneration: releaseLease.claim.lease.leaseGeneration,
+      claimedTokenVersion: releaseLease.claim.bot.tokenVersion,
+      now: new Date(now.getTime() + 2_000),
+    });
+    const releaseOutcome = repository.releaseRuntime({
+      botInstanceId: releaseLease.bot.id,
+      leaseGeneration: releaseLease.claim.lease.leaseGeneration,
+      leaseTokenHash: "hash-release",
+      now: new Date(now.getTime() + 1_000),
+    }).then(
+      (value) => ({ status: "fulfilled" as const, value }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+    const releaseWaited = await waitForBotInstanceLockWait();
+    releaseReplacement.commitReplacement();
+    await releaseReplacement.replacement;
+    const releaseResult = await releaseOutcome;
+
+    expect(releaseWaited).toBe(true);
+    expect(releaseResult.status).toBe("rejected");
+    if (releaseResult.status === "rejected") {
+      expect(isApiError(releaseResult.error)).toBe(true);
+      if (isApiError(releaseResult.error)) {
+        expect(releaseResult.error.code).toBe("BOT_LEASE_GENERATION_MISMATCH");
+      }
+    }
+    expect(await prisma.botRuntimeLease.findUnique({
+      where: { botInstanceId: releaseLease.bot.id },
+    })).toMatchObject({
+      runtimeInstanceId: "replacement-runtime",
+      leaseGeneration: releaseLease.claim.lease.leaseGeneration + 1,
+      leaseTokenHash: "replacement-hash",
+      runtimeState: "CLAIMED",
+    });
   });
 
   it("resolves profile inheritance, preserves installation controls, and transfers ownership", async () => {
@@ -361,15 +643,87 @@ describe("multi-bot repository", () => {
     );
   });
 
-  it("deduplicates event receipts and fences completion by generation", async () => {
+  it("maps concurrent owner demotions to last-owner protection", async () => {
+    const { bot } = await createBot("owner-race-bot", "application-owner-race");
+    await repository.bootstrapInstallation({
+      botInstanceId: bot.id,
+      guildDiscordId: "owner-race-guild",
+      guildName: "Owner Race Guild",
+      ownerProfile: { discordUserId: "owner-race-a", username: "owner-race-a" },
+    });
+    const secondOwner = await repository.upsertUserFromDiscord({
+      discordUserId: "owner-race-b",
+      username: "owner-race-b",
+    }, false);
+    const secondMembership = await repository.upsertGuildMembership(
+      "owner-race-guild",
+      secondOwner.id,
+    );
+    expect(secondMembership).not.toBeNull();
+    await repository.updateGuildMemberRole({
+      guildDiscordId: "owner-race-guild",
+      targetUserId: secondOwner.id,
+      role: "OWNER",
+    });
+    const firstOwner = await repository.getMembershipByDiscordUser(
+      "owner-race-guild",
+      "owner-race-a",
+    );
+    expect(firstOwner).not.toBeNull();
+
+    const outcomes = await Promise.allSettled([
+      repository.updateGuildMemberRole({
+        guildDiscordId: "owner-race-guild",
+        targetUserId: firstOwner!.userId,
+        role: "USER",
+      }),
+      repository.updateGuildMemberRole({
+        guildDiscordId: "owner-race-guild",
+        targetUserId: secondOwner.id,
+        role: "USER",
+      }),
+    ]);
+
+    expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+    const rejected = outcomes.find((outcome) => outcome.status === "rejected");
+    expect(rejected).toBeDefined();
+    if (rejected?.status === "rejected") {
+      expect(isApiError(rejected.reason)).toBe(true);
+      if (isApiError(rejected.reason)) {
+        expect(rejected.reason.code).toBe("LAST_OWNER_PROTECTED");
+      }
+    }
+    expect(await prisma.guildMember.count({
+      where: {
+        guild: { discordGuildId: "owner-race-guild" },
+        tenantRole: "OWNER",
+        status: "ACTIVE",
+      },
+    })).toBe(1);
+  });
+
+  it("idempotently retries event receipts and fences each processing attempt", async () => {
     const { bot } = await createBot("receipt-bot", "application-receipt");
     const now = new Date();
+    const firstRequestId = randomUUID();
     const first = await repository.acquireDiscordEvent({
       botInstanceId: bot.id,
       discordEventId: "message-1",
       eventType: "MESSAGE_CREATE",
       leaseGeneration: 4,
+      acquisitionRequestId: firstRequestId,
       now,
+      expiresAt: new Date(now.getTime() + 86_400_000),
+      staleBefore: new Date(now.getTime() - 60_000),
+      maxAttempts: 3,
+    });
+    const acquisitionRetry = await repository.acquireDiscordEvent({
+      botInstanceId: bot.id,
+      discordEventId: "message-1",
+      eventType: "MESSAGE_CREATE",
+      leaseGeneration: 4,
+      acquisitionRequestId: firstRequestId,
+      now: new Date(now.getTime() + 1_000),
       expiresAt: new Date(now.getTime() + 86_400_000),
       staleBefore: new Date(now.getTime() - 60_000),
       maxAttempts: 3,
@@ -379,12 +733,15 @@ describe("multi-bot repository", () => {
       discordEventId: "message-1",
       eventType: "MESSAGE_CREATE",
       leaseGeneration: 4,
+      acquisitionRequestId: randomUUID(),
       now: new Date(now.getTime() + 1_000),
       expiresAt: new Date(now.getTime() + 86_400_000),
       staleBefore: new Date(now.getTime() - 60_000),
       maxAttempts: 3,
     });
     expect(first.acquired).toBe(true);
+    expect(acquisitionRetry.acquired).toBe(true);
+    expect(acquisitionRetry.receipt.attemptCount).toBe(1);
     expect(duplicate.acquired).toBe(false);
     expect(duplicate.receipt.id).toBe(first.receipt.id);
 
@@ -393,19 +750,37 @@ describe("multi-bot repository", () => {
         receiptId: first.receipt.id,
         botInstanceId: bot.id,
         leaseGeneration: 5,
+        acquisitionRequestId: firstRequestId,
       }),
-      "BOT_LEASE_GENERATION_MISMATCH",
+      "EVENT_RECEIPT_OWNERSHIP_MISMATCH",
+    );
+    await expectApiCode(
+      repository.completeDiscordEvent({
+        receiptId: first.receipt.id,
+        botInstanceId: bot.id,
+        leaseGeneration: 4,
+        acquisitionRequestId: randomUUID(),
+      }),
+      "EVENT_RECEIPT_OWNERSHIP_MISMATCH",
     );
     await repository.completeDiscordEvent({
       receiptId: first.receipt.id,
       botInstanceId: bot.id,
       leaseGeneration: 4,
+      acquisitionRequestId: firstRequestId,
+    });
+    await repository.completeDiscordEvent({
+      receiptId: first.receipt.id,
+      botInstanceId: bot.id,
+      leaseGeneration: 4,
+      acquisitionRequestId: firstRequestId,
     });
     const completed = await repository.acquireDiscordEvent({
       botInstanceId: bot.id,
       discordEventId: "message-1",
       eventType: "MESSAGE_CREATE",
       leaseGeneration: 4,
+      acquisitionRequestId: randomUUID(),
       now: new Date(now.getTime() + 120_000),
       expiresAt: new Date(now.getTime() + 86_400_000),
       staleBefore: new Date(now.getTime() + 60_000),
@@ -414,11 +789,93 @@ describe("multi-bot repository", () => {
     expect(completed.acquired).toBe(false);
     expect(completed.receipt.processingStatus).toBe("COMPLETED");
 
+    await expectApiCode(
+      repository.failDiscordEvent({
+        receiptId: first.receipt.id,
+        botInstanceId: bot.id,
+        leaseGeneration: 4,
+        acquisitionRequestId: firstRequestId,
+        errorCode: "LATE_FAILURE",
+      }),
+      "EVENT_RECEIPT_ALREADY_COMPLETED",
+    );
+    expect(await prisma.discordEventReceipt.findUnique({
+      where: { id: first.receipt.id },
+      select: { processingStatus: true, lastErrorCode: true },
+    })).toEqual({ processingStatus: "COMPLETED", lastErrorCode: null });
+
+    const staleFirstRequestId = randomUUID();
+    const staleFirst = await repository.acquireDiscordEvent({
+      botInstanceId: bot.id,
+      discordEventId: "stale-message",
+      eventType: "MESSAGE_CREATE",
+      leaseGeneration: 4,
+      acquisitionRequestId: staleFirstRequestId,
+      now,
+      expiresAt: new Date(now.getTime() + 86_400_000),
+      staleBefore: new Date(now.getTime() - 60_000),
+      maxAttempts: 3,
+    });
+    const staleSecondRequestId = randomUUID();
+    const staleSecond = await repository.acquireDiscordEvent({
+      botInstanceId: bot.id,
+      discordEventId: "stale-message",
+      eventType: "MESSAGE_CREATE",
+      leaseGeneration: 4,
+      acquisitionRequestId: staleSecondRequestId,
+      now: new Date(now.getTime() + 120_000),
+      expiresAt: new Date(now.getTime() + 86_400_000),
+      staleBefore: new Date(now.getTime() + 60_000),
+      maxAttempts: 3,
+    });
+    expect(staleSecond).toMatchObject({
+      acquired: true,
+      receipt: {
+        id: staleFirst.receipt.id,
+        acquisitionRequestId: staleSecondRequestId,
+        attemptCount: 2,
+      },
+    });
+    await expectApiCode(
+      repository.completeDiscordEvent({
+        receiptId: staleFirst.receipt.id,
+        botInstanceId: bot.id,
+        leaseGeneration: 4,
+        acquisitionRequestId: staleFirstRequestId,
+      }),
+      "EVENT_RECEIPT_OWNERSHIP_MISMATCH",
+    );
+    await expectApiCode(
+      repository.failDiscordEvent({
+        receiptId: staleFirst.receipt.id,
+        botInstanceId: bot.id,
+        leaseGeneration: 4,
+        acquisitionRequestId: staleFirstRequestId,
+        errorCode: "STALE_ATTEMPT_FAILED",
+      }),
+      "EVENT_RECEIPT_OWNERSHIP_MISMATCH",
+    );
+    await repository.failDiscordEvent({
+      receiptId: staleSecond.receipt.id,
+      botInstanceId: bot.id,
+      leaseGeneration: 4,
+      acquisitionRequestId: staleSecondRequestId,
+      errorCode: "CURRENT_ATTEMPT_FAILED",
+    });
+    await repository.failDiscordEvent({
+      receiptId: staleSecond.receipt.id,
+      botInstanceId: bot.id,
+      leaseGeneration: 4,
+      acquisitionRequestId: staleSecondRequestId,
+      errorCode: "CURRENT_ATTEMPT_FAILED",
+    });
+
     await repository.acquireDiscordEvent({
       botInstanceId: bot.id,
       discordEventId: "expired-message-1",
       eventType: "MESSAGE_CREATE",
       leaseGeneration: 4,
+      acquisitionRequestId: randomUUID(),
       now,
       expiresAt: new Date(now.getTime() - 2_000),
       staleBefore: new Date(now.getTime() - 60_000),
@@ -429,6 +886,7 @@ describe("multi-bot repository", () => {
       discordEventId: "expired-message-2",
       eventType: "MESSAGE_CREATE",
       leaseGeneration: 4,
+      acquisitionRequestId: randomUUID(),
       now,
       expiresAt: new Date(now.getTime() - 1_000),
       staleBefore: new Date(now.getTime() - 60_000),
@@ -439,6 +897,7 @@ describe("multi-bot repository", () => {
       discordEventId: "future-message",
       eventType: "MESSAGE_CREATE",
       leaseGeneration: 4,
+      acquisitionRequestId: randomUUID(),
       now,
       expiresAt: new Date(now.getTime() + 86_400_000),
       staleBefore: new Date(now.getTime() - 60_000),
@@ -457,6 +916,50 @@ describe("multi-bot repository", () => {
       where: { discordEventId: "future-message" },
     })).toBe(1);
   });
+
+  it("purges aged moderation events independently of conversation expiry", async () => {
+    const { bot } = await createBot("moderation-retention", "application-moderation-retention");
+    const conversation = await repository.getOrCreateConversation({
+      botInstanceId: bot.id,
+      type: "DM",
+      discordUserId: "moderation-retention-user",
+    });
+    const oldConversationEvent = await repository.recordLlmModerationEvent({
+      botInstanceId: bot.id,
+      conversationId: conversation.id,
+      category: "old-conversation-event",
+      action: "BLOCK",
+    });
+    const oldUnscopedEvent = await repository.recordLlmModerationEvent({
+      botInstanceId: bot.id,
+      category: "old-unscoped-event",
+      action: "BLOCK",
+    });
+    const recentEvent = await repository.recordLlmModerationEvent({
+      botInstanceId: bot.id,
+      conversationId: conversation.id,
+      category: "recent-event",
+      action: "ALLOW",
+    });
+    const now = new Date();
+    await prisma.llmModerationEvent.updateMany({
+      where: { id: { in: [oldConversationEvent.id, oldUnscopedEvent.id] } },
+      data: { createdAt: new Date(now.getTime() - 91 * 86_400_000) },
+    });
+
+    expect(await repository.purgeExpiredLlmData(now)).toEqual({
+      deletedMessages: 0,
+      deletedGenerations: 0,
+      deletedModerationEvents: 2,
+      deletedConversations: 0,
+    });
+    expect(await prisma.llmConversation.count({
+      where: { id: conversation.id },
+    })).toBe(1);
+    expect(await prisma.llmModerationEvent.findMany({
+      select: { id: true },
+    })).toEqual([{ id: recentEvent.id }]);
+  });
 });
 
 describe("multi-bot API contracts", () => {
@@ -472,6 +975,7 @@ describe("multi-bot API contracts", () => {
       BOT_POOL_BOOTSTRAP_KEY_HASH: hashOpaqueToken(poolCredential),
       PGBOSS_ENABLED: "false",
       LLM_ENABLED: "true",
+      LLM_DEFAULT_MODEL: "gpt-5.6-luna",
     });
     const app = await buildApp({ config, repository });
     await app.ready();
@@ -502,7 +1006,9 @@ describe("multi-bot API contracts", () => {
         },
       });
       expect(createResponse.statusCode).toBe(200);
-      const botId = createResponse.json().bot.id as string;
+      const createdBot = createResponse.json();
+      const botId = createdBot.bot.id as string;
+      expect(createdBot.profile.defaultModel).toBe(config.llmDefaultModel);
 
       const immutablePatch = await app.inject({
         method: "PATCH",
@@ -597,6 +1103,7 @@ describe("multi-bot API contracts", () => {
         slug: "other-api-bot",
         displayName: "Other Bot",
         discordApplicationId: "123456789",
+        defaultModel: config.llmDefaultModel,
       });
       const crossBotHeartbeat = await app.inject({
         method: "POST",
@@ -612,6 +1119,28 @@ describe("multi-bot API contracts", () => {
         guildName: "API Guild",
         ownerProfile: { discordUserId: "platform-admin", username: "admin" },
       });
+      const featureUpdate = await app.inject({
+        method: "PATCH",
+        url: `/api/v1/guilds/api-guild/bots/${botId}/features/operations-feature`,
+        headers: browserHeaders,
+        payload: {
+          enabled: true,
+          configJson: { mode: "enabled" },
+        },
+      });
+      expect(featureUpdate.statusCode).toBe(200);
+      expect((await repository.listJobRuns({
+        guildDiscordId: "api-guild",
+        botInstanceId: botId,
+        limit: 10,
+      })).items).toEqual([
+        expect.objectContaining({
+          botInstanceId: botId,
+          botInstallationId: installation.installation.id,
+          jobType: "feature.update.reconcile",
+          status: "COMPLETED",
+        }),
+      ]);
       const inheritedPrompts = await app.inject({
         method: "GET",
         url: `/api/v1/guilds/api-guild/bots/${botId}/settings`,

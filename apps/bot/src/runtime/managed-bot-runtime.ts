@@ -43,6 +43,7 @@ export class ManagedBotRuntime {
   private leaseExpiresAt: number;
   private heartbeatTimer?: ReturnType<typeof setTimeout>;
   private safetyTimer?: ReturnType<typeof setTimeout>;
+  private commandSyncInFlight?: Promise<void>;
   private acceptingNewWork = true;
   private quarantined = false;
   private stopping = false;
@@ -325,26 +326,38 @@ export class ManagedBotRuntime {
   ): Promise<void> {
     if (!this.canAcceptNewWork()) return;
 
-    let receiptId: string | undefined;
+    let receipt: { id: string; acquisitionRequestId: string } | undefined;
     try {
       const acquisition = await this.apiClient.acquireEvent(eventId, eventType);
       if (!acquisition.acquired) return;
-      receiptId = acquisition.receipt.id;
+      receipt = acquisition.receipt;
       if (!this.canPerformDiscordSideEffects()) {
-        await this.apiClient.failEvent(receiptId, "RUNTIME_QUARANTINED");
+        await this.apiClient.failEvent(
+          receipt.id,
+          receipt.acquisitionRequestId,
+          "RUNTIME_QUARANTINED",
+        );
         return;
       }
       await handler();
       if (!this.canPerformDiscordSideEffects()) {
-        await this.apiClient.failEvent(receiptId, "RUNTIME_QUARANTINED");
+        await this.apiClient.failEvent(
+          receipt.id,
+          receipt.acquisitionRequestId,
+          "RUNTIME_QUARANTINED",
+        );
         return;
       }
-      await this.apiClient.completeEvent(receiptId);
+      await this.apiClient.completeEvent(receipt.id, receipt.acquisitionRequestId);
     } catch (error) {
       this.logger.error({ err: error, eventId, eventType }, "Discord event handling failed");
-      if (receiptId) {
+      if (receipt) {
         await this.apiClient
-          .failEvent(receiptId, sanitizedErrorCode(error, "EVENT_HANDLER_FAILED"))
+          .failEvent(
+            receipt.id,
+            receipt.acquisitionRequestId,
+            sanitizedErrorCode(error, "EVENT_HANDLER_FAILED"),
+          )
           .catch((receiptError) => {
             this.logger.warn(
               { err: receiptError, eventId, eventType },
@@ -381,20 +394,15 @@ export class ManagedBotRuntime {
       await this.renewLease(this.ready ? "READY" : "CONNECTING");
       if (this.stopping) return;
 
-      if (this.ready) {
-        await this.synchronizePendingCommandManifests().catch((error) => {
-          this.logger.warn(
-            { err: error },
-            "Pending command manifest polling failed; lease remains healthy",
-          );
-        });
-      }
       if (this.quarantined) {
         this.quarantined = false;
         this.acceptingNewWork = true;
         this.logger.info("Bot runtime lease ownership recovered");
       }
       this.scheduleHeartbeat();
+      if (this.ready) {
+        this.startCommandSyncMaintenance();
+      }
     } catch (error) {
       await this.enterQuarantine(sanitizedErrorCode(error, "HEARTBEAT_FAILED"));
       if (this.terminal) return;
@@ -435,10 +443,25 @@ export class ManagedBotRuntime {
     this.resetSafetyTimer();
   }
 
+  private startCommandSyncMaintenance(): void {
+    if (this.stopping || this.commandSyncInFlight) return;
+
+    this.commandSyncInFlight = this.synchronizePendingCommandManifests()
+      .catch((error) => {
+        this.logger.warn(
+          { err: error },
+          "Pending command manifest polling failed; lease remains healthy",
+        );
+      })
+      .finally(() => {
+        this.commandSyncInFlight = undefined;
+      });
+  }
+
   private async synchronizePendingCommandManifests(): Promise<void> {
     const { items } = await this.apiClient.pendingCommandManifests();
     for (const installation of items) {
-      if (!this.canPerformDiscordSideEffects()) return;
+      if (this.stopping || !this.canPerformDiscordSideEffects()) return;
       try {
         await synchronizeGuildCommands({
           apiClient: this.apiClient,

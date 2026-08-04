@@ -97,9 +97,15 @@ const llmRespondBody = z.object({
 const receiptBody = z.object({
   discordEventId: z.string().min(1),
   eventType: z.enum(["MESSAGE_CREATE", "INTERACTION_CREATE"]),
+  acquisitionRequestId: z.string().uuid(),
 }).strict();
 const receiptParams = z.object({ receiptId: z.string().uuid() });
-const failureBody = z.object({ errorCode: z.string().min(1).max(100) }).strict();
+const receiptAttemptBody = z.object({
+  acquisitionRequestId: z.string().uuid(),
+}).strict();
+const failureBody = receiptAttemptBody.extend({
+  errorCode: z.string().min(1).max(100),
+}).strict();
 
 function noStore(reply: { header(name: string, value: string): unknown }): void {
   reply.header("Cache-Control", "no-store");
@@ -692,6 +698,7 @@ export async function registerInternalRoutes(app: FastifyInstance): Promise<void
         discordEventId: body.discordEventId,
         eventType: body.eventType,
         leaseGeneration: context.lease.leaseGeneration,
+        acquisitionRequestId: body.acquisitionRequestId,
         now,
         expiresAt: new Date(now.getTime() + 7 * 86_400_000),
         staleBefore: new Date(now.getTime() - 60_000),
@@ -702,10 +709,12 @@ export async function registerInternalRoutes(app: FastifyInstance): Promise<void
     botApp.post("/events/receipts/:receiptId/complete", async (request) => {
       const context = leaseContext(request);
       const { receiptId } = receiptParams.parse(request.params);
+      const { acquisitionRequestId } = receiptAttemptBody.parse(request.body ?? {});
       await botApp.repository.completeDiscordEvent({
         receiptId,
         botInstanceId: context.bot.id,
         leaseGeneration: context.lease.leaseGeneration,
+        acquisitionRequestId,
       });
       return { completed: true };
     });
@@ -713,11 +722,12 @@ export async function registerInternalRoutes(app: FastifyInstance): Promise<void
     botApp.post("/events/receipts/:receiptId/fail", async (request) => {
       const context = leaseContext(request);
       const { receiptId } = receiptParams.parse(request.params);
-      const { errorCode } = failureBody.parse(request.body ?? {});
+      const { acquisitionRequestId, errorCode } = failureBody.parse(request.body ?? {});
       await botApp.repository.failDiscordEvent({
         receiptId,
         botInstanceId: context.bot.id,
         leaseGeneration: context.lease.leaseGeneration,
+        acquisitionRequestId,
         errorCode,
       });
       return { failed: true };

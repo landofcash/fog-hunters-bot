@@ -221,6 +221,7 @@ export interface InternalLlmSettingsResponse {
 export interface DiscordEventReceiptResponse {
   receipt: {
     id: string;
+    acquisitionRequestId: string;
     processingStatus: "RECEIVED" | "PROCESSING" | "COMPLETED" | "FAILED";
     attemptCount: number;
   };

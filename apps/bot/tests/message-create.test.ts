@@ -76,9 +76,9 @@ describe("message response buffer", () => {
     const apiClient = createApiClientMock();
     const buffer = new MessageResponseBuffer(apiClient, createLoggerMock());
 
-    await buffer.enqueue(createMessageMock({ id: "message-1", content: "First part" }));
+    await buffer.enqueue(createMessageMock({ id: "1", content: "First part" }));
     await vi.advanceTimersByTimeAsync(3_000);
-    await buffer.enqueue(createMessageMock({ id: "message-2", content: "Second part" }));
+    await buffer.enqueue(createMessageMock({ id: "2", content: "Second part" }));
     await vi.advanceTimersByTimeAsync(3_999);
     expect(apiClient.respondWithLlm).not.toHaveBeenCalled();
 
@@ -86,11 +86,31 @@ describe("message response buffer", () => {
     expect(apiClient.respondWithLlm).toHaveBeenCalledTimes(1);
     expect(apiClient.respondWithLlm).toHaveBeenCalledWith(expect.objectContaining({
       content: "Second part",
-      messageId: "message-2",
+      messageId: "2",
       contextMessages: [{
         discordUserId: "user-1",
         content: "First part",
-        messageId: "message-1",
+        messageId: "1",
+      }],
+    }));
+  });
+
+  it("orders buffered messages by Discord snowflake before processing", async () => {
+    vi.useFakeTimers();
+    const apiClient = createApiClientMock();
+    const buffer = new MessageResponseBuffer(apiClient, createLoggerMock());
+
+    await buffer.enqueue(createMessageMock({ id: "2", content: "Newer message" }));
+    await buffer.enqueue(createMessageMock({ id: "1", content: "Older message" }));
+    await vi.advanceTimersByTimeAsync(4_000);
+
+    expect(apiClient.respondWithLlm).toHaveBeenCalledWith(expect.objectContaining({
+      content: "Newer message",
+      messageId: "2",
+      contextMessages: [{
+        discordUserId: "user-1",
+        content: "Older message",
+        messageId: "1",
       }],
     }));
   });
@@ -100,13 +120,13 @@ describe("message response buffer", () => {
     const apiClient = createApiClientMock();
     const buffer = new MessageResponseBuffer(apiClient, createLoggerMock());
 
-    await buffer.enqueue(createMessageMock({ id: "message-1", content: "Part 1" }));
+    await buffer.enqueue(createMessageMock({ id: "1", content: "Part 1" }));
     await vi.advanceTimersByTimeAsync(3_000);
-    await buffer.enqueue(createMessageMock({ id: "message-2", content: "Part 2" }));
+    await buffer.enqueue(createMessageMock({ id: "2", content: "Part 2" }));
     await vi.advanceTimersByTimeAsync(3_000);
-    await buffer.enqueue(createMessageMock({ id: "message-3", content: "Part 3" }));
+    await buffer.enqueue(createMessageMock({ id: "3", content: "Part 3" }));
     await vi.advanceTimersByTimeAsync(3_000);
-    await buffer.enqueue(createMessageMock({ id: "message-4", content: "Part 4" }));
+    await buffer.enqueue(createMessageMock({ id: "4", content: "Part 4" }));
     await vi.advanceTimersByTimeAsync(999);
     expect(apiClient.respondWithLlm).not.toHaveBeenCalled();
 
@@ -127,9 +147,9 @@ describe("message response buffer", () => {
     const apiClient = createApiClientMock();
     const buffer = new MessageResponseBuffer(apiClient, createLoggerMock());
 
-    await buffer.enqueue(createMessageMock({ id: "message-1", content: "Background" }));
+    await buffer.enqueue(createMessageMock({ id: "1", content: "Background" }));
     await buffer.enqueue(createMessageMock({
-      id: "message-2",
+      id: "2",
       content: "<@bot-1> what do you think?",
       mentions: { has: vi.fn().mockReturnValue(true) },
     }));
@@ -166,11 +186,11 @@ describe("message response buffer", () => {
     const buffer = new MessageResponseBuffer(apiClient, createLoggerMock());
 
     const first = buffer.enqueueAndWait(
-      createMessageMock({ id: "message-1", content: "First part" }),
+      createMessageMock({ id: "1", content: "First part" }),
     );
     const second = buffer.enqueueAndWait(
       createMessageMock({
-        id: "message-2",
+        id: "2",
         content: "<@bot-1> second part",
         mentions: { has: vi.fn().mockReturnValue(true) },
       }),

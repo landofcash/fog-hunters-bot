@@ -159,6 +159,59 @@ describe("ApiClient", () => {
     expect(logger.warn).toHaveBeenCalledTimes(2);
   });
 
+  it("reuses one acquisition request ID across receipt retries and terminal updates", async () => {
+    const requestBodies: Array<Record<string, unknown>> = [];
+    const fetchMock = vi.fn(async (url: string, request: RequestInit) => {
+      const body = JSON.parse(String(request.body)) as Record<string, unknown>;
+      requestBodies.push(body);
+      if (url.endsWith("/events/receipts") && requestBodies.length === 1) {
+        throw new TypeError("response lost");
+      }
+      if (url.endsWith("/events/receipts")) {
+        return new Response(JSON.stringify({
+          receipt: {
+            id: "00000000-0000-4000-8000-000000000001",
+            acquisitionRequestId: body.acquisitionRequestId,
+            processingStatus: "PROCESSING",
+            attemptCount: 1,
+          },
+          acquired: true,
+        }), { status: 200 });
+      }
+      return new Response("{}", { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createLeaseClient(createBotConfig({ httpRetryMax: 1 }));
+
+    const acquisition = await client.acquireEvent("message-1", "MESSAGE_CREATE");
+    await client.completeEvent(
+      acquisition.receipt.id,
+      acquisition.receipt.acquisitionRequestId,
+    );
+    await client.failEvent(
+      acquisition.receipt.id,
+      acquisition.receipt.acquisitionRequestId,
+      "EVENT_HANDLER_FAILED",
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(requestBodies[0]).toEqual(requestBodies[1]);
+    expect(requestBodies[0]).toMatchObject({
+      discordEventId: "message-1",
+      eventType: "MESSAGE_CREATE",
+      acquisitionRequestId: expect.stringMatching(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+      ),
+    });
+    expect(requestBodies[2]).toEqual({
+      acquisitionRequestId: acquisition.receipt.acquisitionRequestId,
+    });
+    expect(requestBodies[3]).toEqual({
+      acquisitionRequestId: acquisition.receipt.acquisitionRequestId,
+      errorCode: "EVENT_HANDLER_FAILED",
+    });
+  });
+
   it("surfaces the final error after retry exhaustion", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 500 }));
     vi.stubGlobal("fetch", fetchMock);

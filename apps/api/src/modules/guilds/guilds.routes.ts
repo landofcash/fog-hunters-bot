@@ -281,6 +281,8 @@ export async function registerGuildRoutes(app: FastifyInstance): Promise<void> {
         const { guildId, botId, featureKey } = featureParams.parse(request.params);
         const installation = await presentInstallation(guildApp, botId, guildId);
         const body = featureBody.parse(request.body ?? {});
+        const auth = request.auth;
+        if (!auth) throw new ApiError(401, "UNAUTHENTICATED", "Authentication required.");
         const result = await guildApp.repository.upsertFeatureFlag({
           botInstanceId: botId,
           guildDiscordId: guildId,
@@ -297,6 +299,13 @@ export async function registerGuildRoutes(app: FastifyInstance): Promise<void> {
           entityId: result.current.id,
           before: result.previous ? { ...result.previous } : null,
           after: { ...result.current },
+        });
+        await guildApp.jobs.enqueueFeatureUpdate({
+          guildDiscordId: guildId,
+          botInstanceId: botId,
+          botInstallationId: installation.id,
+          featureKey,
+          actorUserId: auth.userId,
         });
         return result;
       },
