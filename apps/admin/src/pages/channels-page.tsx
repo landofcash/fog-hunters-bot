@@ -24,19 +24,19 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 
 export function ChannelsPage() {
-  const { guildId = "" } = useParams();
+  const { guildId = "", botId = "" } = useParams();
   const [channelId, setChannelId] = useState("");
   const [mentionOnly, setMentionOnly] = useState(false);
   const [clearChannelId, setClearChannelId] = useState<string>();
   const llm = useQuery({
-    queryKey: ["guild", guildId, "llm"],
-    queryFn: () => api.llmSettings(guildId),
+    queryKey: ["guild", guildId, "bot", botId, "llm"],
+    queryFn: () => api.llmSettings(guildId, botId),
   });
 
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ["guild", guildId, "llm"] });
+  const refresh = () => queryClient.invalidateQueries({ queryKey: ["guild", guildId, "bot", botId, "llm"] });
   const configure = useMutation({
     mutationFn: (input: { id: string; mentionOnly: boolean }) =>
-      api.configureChannel(guildId, input.id, input.mentionOnly),
+      api.configureChannel(guildId, botId, input.id, input.mentionOnly),
     onSuccess: async () => {
       await refresh();
       setChannelId("");
@@ -46,7 +46,7 @@ export function ChannelsPage() {
     onError: (error) => toast.error(error.message),
   });
   const disable = useMutation({
-    mutationFn: (id: string) => api.disableChannel(guildId, id),
+    mutationFn: (id: string) => api.disableChannel(guildId, botId, id),
     onSuccess: async () => {
       await refresh();
       toast.success("AI disabled for channel");
@@ -54,7 +54,7 @@ export function ChannelsPage() {
     onError: (error) => toast.error(error.message),
   });
   const clearMemory = useMutation({
-    mutationFn: (id: string) => api.clearChannelMemory(guildId, id),
+    mutationFn: (id: string) => api.clearChannelMemory(guildId, botId, id),
     onSuccess: (_, id) => {
       setClearChannelId(undefined);
       toast.success(`Retained memory cleared for ${id}`);
@@ -63,6 +63,7 @@ export function ChannelsPage() {
   });
 
   const channels = llm.data?.channels ?? [];
+  const readOnly = llm.data?.installation.presenceStatus !== "PRESENT";
 
   return (
     <div className="space-y-7">
@@ -72,6 +73,11 @@ export function ChannelsPage() {
         description="Enable the bot in selected Discord channels and choose whether a mention is required."
       />
       {llm.error ? <ErrorState error={llm.error} /> : null}
+      {readOnly ? (
+        <div className="rounded-xl border border-amber-300/15 bg-amber-400/7 px-4 py-3 text-sm text-amber-100">
+          Channel settings and retained history are read-only while the bot is absent.
+        </div>
+      ) : null}
       {!llm.data?.settings.platformEnabled ? (
         <div className="flex gap-3 rounded-xl border border-rose-300/15 bg-rose-400/7 px-4 py-3 text-sm text-rose-100">
           <ShieldAlert className="size-4 shrink-0" />
@@ -89,15 +95,16 @@ export function ChannelsPage() {
                 inputMode="numeric"
                 placeholder="123456789012345678"
                 value={channelId}
+                disabled={readOnly}
                 onChange={(event) => setChannelId(event.target.value.trim())}
               />
             </div>
             <label className="flex h-10 items-center gap-3 rounded-lg border border-white/10 px-3 text-sm text-slate-300">
-              <Switch checked={mentionOnly} onCheckedChange={setMentionOnly} />
+              <Switch disabled={readOnly} checked={mentionOnly} onCheckedChange={setMentionOnly} />
               Mention only
             </label>
             <Button
-              disabled={!channelId || configure.isPending}
+              disabled={readOnly || !channelId || configure.isPending}
               onClick={() => configure.mutate({ id: channelId, mentionOnly })}
             >
               <Plus className="size-4" />
@@ -130,7 +137,7 @@ export function ChannelsPage() {
                 Mention only
                 <Switch
                   checked={channel.respondOnMentionOnly}
-                  disabled={!channel.enabled || configure.isPending}
+                  disabled={readOnly || !channel.enabled || configure.isPending}
                   onCheckedChange={(checked) =>
                     configure.mutate({ id: channel.discordChannelId, mentionOnly: checked })
                   }
@@ -139,6 +146,7 @@ export function ChannelsPage() {
               <Button
                 size="sm"
                 variant="outline"
+                disabled={readOnly}
                 onClick={() =>
                   channel.enabled
                     ? disable.mutate(channel.discordChannelId)
@@ -155,6 +163,7 @@ export function ChannelsPage() {
                 variant="ghost"
                 className="text-rose-300"
                 aria-label="Clear retained channel memory"
+                disabled={readOnly}
                 onClick={() => setClearChannelId(channel.discordChannelId)}
               >
                 <Trash2 className="size-4" />
@@ -182,6 +191,7 @@ export function ChannelsPage() {
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
+              disabled={readOnly}
               onClick={() => clearChannelId && clearMemory.mutate(clearChannelId)}
             >
               Clear memory

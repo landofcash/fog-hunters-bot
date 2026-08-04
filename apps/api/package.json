@@ -18,8 +18,9 @@
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:migrate:deploy": "prisma migrate deploy",
-    "prisma:migrate:test": "cross-env DATABASE_URL=postgresql://fhaibot:fhaibot_local@localhost:55432/fhaibot_test?schema=public prisma migrate deploy"
+    "prisma:migrate:deploy": "node prisma/assert-clean-baseline.mjs && prisma migrate deploy",
+    "prisma:migrate:test": "cross-env DATABASE_URL=postgresql://fhaibot:fhaibot_local@localhost:55432/fhaibot_test?schema=public npm run prisma:migrate:deploy",
+    "bot-tokens:rotate-keys": "tsx src/rotate-bot-token-keys.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^10.0.1",

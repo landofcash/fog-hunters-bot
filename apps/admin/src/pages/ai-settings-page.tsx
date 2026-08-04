@@ -35,18 +35,23 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { LLM_PROMPT_MAX_LENGTH } from "@/lib/llm-limits";
 
 const settingsSchema = z.object({
   enabled: z.boolean(),
   dmEnabled: z.boolean(),
-  retentionDays: z.number().int().min(1).max(3650),
-  maxInputChars: z.number().int().min(128).max(32000),
-  maxOutputTokens: z.number().int().min(64).max(4096),
-  assistantPrompt: z.string().max(32000),
-  gatekeeperPrompt: z.string().max(32000),
+  retentionDays: z.number().int().min(1).max(3650).nullable(),
+  maxInputChars: z.number().int().min(128).max(32000).nullable(),
+  maxOutputTokens: z.number().int().min(64).max(4096).nullable(),
+  assistantPrompt: z.string().max(LLM_PROMPT_MAX_LENGTH),
+  gatekeeperPrompt: z.string().max(LLM_PROMPT_MAX_LENGTH),
 });
 
 type SettingsForm = z.infer<typeof settingsSchema>;
+
+function parseNullableNumberInput(value: string): number | null {
+  return value === "" ? null : Number(value);
+}
 
 function FormField({
   label,
@@ -67,13 +72,13 @@ function FormField({
 }
 
 export function AiSettingsPage() {
-  const { guildId = "" } = useParams();
+  const { guildId = "", botId = "" } = useParams();
   const [confirmSuspend, setConfirmSuspend] = useState(false);
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: api.me });
   const isPlatformAdmin = me?.platformRole === "PLATFORM_ADMIN";
   const llm = useQuery({
-    queryKey: ["guild", guildId, "llm"],
-    queryFn: () => api.llmSettings(guildId),
+    queryKey: ["guild", guildId, "bot", botId, "llm"],
+    queryFn: () => api.llmSettings(guildId, botId),
   });
   const models = useQuery({
     queryKey: ["platform", "llm-models"],
@@ -85,9 +90,9 @@ export function AiSettingsPage() {
     defaultValues: {
       enabled: false,
       dmEnabled: false,
-      retentionDays: 30,
-      maxInputChars: 4000,
-      maxOutputTokens: 512,
+      retentionDays: null,
+      maxInputChars: null,
+      maxOutputTokens: null,
       assistantPrompt: "",
       gatekeeperPrompt: "",
     },
@@ -118,13 +123,13 @@ export function AiSettingsPage() {
 
   const save = useMutation({
     mutationFn: (values: SettingsForm) =>
-      api.updateLlmSettings(guildId, {
+      api.updateLlmSettings(guildId, botId, {
         ...values,
         assistantPrompt: values.assistantPrompt.trim() || null,
         gatekeeperPrompt: values.gatekeeperPrompt.trim() || null,
       }),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["guild", guildId] });
+      await queryClient.invalidateQueries({ queryKey: ["guild", guildId, "bot", botId] });
       toast.success("AI settings saved");
     },
     onError: (error) => toast.error(error.message),
@@ -132,11 +137,14 @@ export function AiSettingsPage() {
 
   const platformPolicy = useMutation({
     mutationFn: (body: { platformEnabled?: boolean; defaultModel?: string }) =>
-      api.updatePlatformPolicy(guildId, body),
+      api.updatePlatformPolicy(botId, llm.data!.installation.id, {
+        llmEnabledByPlatform: body.platformEnabled,
+        modelOverride: body.defaultModel,
+      }),
     onSuccess: async (_, variables) => {
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["guild", guildId] }),
-        queryClient.invalidateQueries({ queryKey: ["platform", "guilds"] }),
+        queryClient.invalidateQueries({ queryKey: ["guild", guildId, "bot", botId] }),
+        queryClient.invalidateQueries({ queryKey: ["platform", "bots"] }),
       ]);
       setConfirmSuspend(false);
       toast.success(
@@ -155,6 +163,7 @@ export function AiSettingsPage() {
   }
 
   const settings = llm.data?.settings;
+  const readOnly = llm.data?.installation.presenceStatus !== "PRESENT";
   const assistantLength = form.watch("assistantPrompt").length;
   const gatekeeperLength = form.watch("gatekeeperPrompt").length;
 
@@ -166,7 +175,7 @@ export function AiSettingsPage() {
         description="Control this guild's AI behavior, prompt overrides, retention, and response limits."
         action={
           <Button
-            disabled={!form.formState.isDirty || save.isPending}
+            disabled={readOnly || !form.formState.isDirty || save.isPending}
             onClick={form.handleSubmit((values) => save.mutate(values))}
           >
             <Save className="size-4" />
@@ -175,6 +184,11 @@ export function AiSettingsPage() {
         }
       />
       {llm.error ? <ErrorState error={llm.error} /> : null}
+      {readOnly ? (
+        <div className="rounded-xl border border-amber-300/15 bg-amber-400/7 px-4 py-3 text-sm text-amber-100">
+          This installation is read-only because the bot is no longer present.
+        </div>
+      ) : null}
       {!settings?.platformEnabled ? (
         <div className="flex gap-3 rounded-xl border border-rose-300/15 bg-rose-400/7 px-4 py-3 text-sm text-rose-100">
           <ShieldAlert className="mt-0.5 size-4 shrink-0" />
@@ -205,6 +219,7 @@ export function AiSettingsPage() {
                 <Switch
                   id="guild-ai-enabled"
                   checked={form.watch("enabled")}
+                  disabled={readOnly}
                   onCheckedChange={(checked) => form.setValue("enabled", checked, { shouldDirty: true })}
                 />
               </div>
@@ -217,7 +232,7 @@ export function AiSettingsPage() {
                 <Switch
                   id="dm-enabled"
                   checked={form.watch("dmEnabled")}
-                  onCheckedChange={(checked) => form.setValue("dmEnabled", checked, { shouldDirty: true })}
+                  disabled
                 />
               </div>
             </CardContent>
@@ -237,20 +252,24 @@ export function AiSettingsPage() {
               >
                 <Textarea
                   className="min-h-48 resize-y font-mono text-xs leading-relaxed"
-                  maxLength={32000}
+                  disabled={readOnly}
+                  maxLength={LLM_PROMPT_MAX_LENGTH}
                   placeholder={llm.data?.effectivePrompts.assistant}
                   {...form.register("assistantPrompt")}
                 />
                 <div className="flex justify-between text-[11px] text-slate-600">
                   <button
                     type="button"
+                    disabled={readOnly}
                     className="flex items-center gap-1 hover:text-slate-300"
                     onClick={() => form.setValue("assistantPrompt", "", { shouldDirty: true })}
                   >
                     <RotateCcw className="size-3" />
                     Use default
                   </button>
-                  <span>{assistantLength.toLocaleString()} / 32,000</span>
+                  <span>
+                    {assistantLength.toLocaleString()} / {LLM_PROMPT_MAX_LENGTH.toLocaleString()}
+                  </span>
                 </div>
               </FormField>
               <Separator />
@@ -260,20 +279,24 @@ export function AiSettingsPage() {
               >
                 <Textarea
                   className="min-h-48 resize-y font-mono text-xs leading-relaxed"
-                  maxLength={32000}
+                  disabled={readOnly}
+                  maxLength={LLM_PROMPT_MAX_LENGTH}
                   placeholder={llm.data?.effectivePrompts.gatekeeper}
                   {...form.register("gatekeeperPrompt")}
                 />
                 <div className="flex justify-between text-[11px] text-slate-600">
                   <button
                     type="button"
+                    disabled={readOnly}
                     className="flex items-center gap-1 hover:text-slate-300"
                     onClick={() => form.setValue("gatekeeperPrompt", "", { shouldDirty: true })}
                   >
                     <RotateCcw className="size-3" />
                     Use default
                   </button>
-                  <span>{gatekeeperLength.toLocaleString()} / 32,000</span>
+                  <span>
+                    {gatekeeperLength.toLocaleString()} / {LLM_PROMPT_MAX_LENGTH.toLocaleString()}
+                  </span>
                 </div>
               </FormField>
             </CardContent>
@@ -285,14 +308,38 @@ export function AiSettingsPage() {
               <CardDescription>Bound context size, output length, and retained conversation data.</CardDescription>
             </CardHeader>
             <CardContent className="grid gap-5 sm:grid-cols-3">
-              <FormField label="Retention days">
-                <Input type="number" {...form.register("retentionDays", { valueAsNumber: true })} />
+              <FormField
+                label="Retention days"
+                description={`Blank inherits the bot profile value (${llm.data?.effective.retentionDays.toLocaleString() ?? "unavailable"}).`}
+              >
+                <Input
+                  disabled={readOnly}
+                  type="number"
+                  placeholder={llm.data ? String(llm.data.effective.retentionDays) : undefined}
+                  {...form.register("retentionDays", { setValueAs: parseNullableNumberInput })}
+                />
               </FormField>
-              <FormField label="Max input characters">
-                <Input type="number" {...form.register("maxInputChars", { valueAsNumber: true })} />
+              <FormField
+                label="Max input characters"
+                description={`Blank inherits the bot profile value (${llm.data?.effective.maxInputChars.toLocaleString() ?? "unavailable"}).`}
+              >
+                <Input
+                  disabled={readOnly}
+                  type="number"
+                  placeholder={llm.data ? String(llm.data.effective.maxInputChars) : undefined}
+                  {...form.register("maxInputChars", { setValueAs: parseNullableNumberInput })}
+                />
               </FormField>
-              <FormField label="Max output tokens">
-                <Input type="number" {...form.register("maxOutputTokens", { valueAsNumber: true })} />
+              <FormField
+                label="Max output tokens"
+                description={`Blank inherits the bot profile value (${llm.data?.effective.maxOutputTokens.toLocaleString() ?? "unavailable"}).`}
+              >
+                <Input
+                  disabled={readOnly}
+                  type="number"
+                  placeholder={llm.data ? String(llm.data.effective.maxOutputTokens) : undefined}
+                  {...form.register("maxOutputTokens", { setValueAs: parseNullableNumberInput })}
+                />
               </FormField>
             </CardContent>
           </Card>
@@ -320,7 +367,7 @@ export function AiSettingsPage() {
                 <Select
                   value={settings?.defaultModel}
                   onValueChange={(defaultModel) => platformPolicy.mutate({ defaultModel })}
-                  disabled={platformPolicy.isPending}
+                  disabled={readOnly || platformPolicy.isPending}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select a model" />
@@ -366,7 +413,7 @@ export function AiSettingsPage() {
                   </div>
                   <Switch
                     checked={settings?.platformEnabled ?? false}
-                    disabled={platformPolicy.isPending}
+                    disabled={readOnly || platformPolicy.isPending}
                     onCheckedChange={(checked) => {
                       if (checked) {
                         platformPolicy.mutate({ platformEnabled: true });

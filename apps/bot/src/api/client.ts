@@ -2,14 +2,22 @@ import type { Logger } from "pino";
 import type { BotConfig } from "../config";
 import { ApiClientError } from "../runtime/errors";
 import type {
+  AssignmentListResponse,
+  BotClaimResponse,
+  BotInstallationSummary,
+  BootstrapInstallationResponse,
+  BotLeaseCredentials,
+  BotRuntimeState,
+  BotRuntimeStatus,
   CommandCheckResponse,
+  DiscordEventReceiptResponse,
   InternalAdminListResponse,
   InternalAdminMutationResponse,
   InternalBootstrapRequest,
   InternalGuildSettingsResponse,
-  InternalLlmSettingsResponse,
   InternalLlmRespondRequest,
   InternalLlmRespondResponse,
+  InternalLlmSettingsResponse,
   InternalUserTouchRequest,
 } from "./contracts";
 
@@ -21,55 +29,227 @@ interface ErrorBody {
   };
 }
 
-export class ApiClient {
+interface EffectiveSettingsWireResponse {
+  installation: {
+    guildId: string;
+    guildName: string;
+    presenceStatus: "PRESENT" | "LEFT";
+    operationalStatus: "ENABLED" | "DISABLED";
+  };
+  settings: {
+    llmEnabledByGuild: boolean;
+    llmEnabledByPlatform: boolean;
+  };
+  effective: {
+    model: string;
+    assistantPrompt?: string | null;
+    gatekeeperPrompt?: string | null;
+    retentionDays: number;
+    maxInputChars: number;
+    maxOutputTokens: number;
+    dmEnabled: boolean;
+  };
+  effectiveAiEnabled: boolean;
+  effectivePrompts: {
+    assistant: string;
+    gatekeeper: string;
+  };
+}
+
+async function requestJson<T>(input: {
+  config: BotConfig;
+  logger: Logger;
+  path: string;
+  init: RequestInit;
+  authHeaders: Record<string, string>;
+  retriesLeft?: number;
+}): Promise<T> {
+  const retriesLeft = input.retriesLeft ?? input.config.httpRetryMax;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), input.config.httpTimeoutMs);
+  try {
+    const response = await fetch(`${input.config.apiBaseUrl}${input.path}`, {
+      ...input.init,
+      headers: {
+        "content-type": "application/json",
+        ...input.authHeaders,
+        ...(input.init.headers ?? {}),
+      },
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as ErrorBody;
+      throw new ApiClientError(
+        response.status,
+        body.error?.message ?? `Request failed with status ${response.status}`,
+        body.error?.code,
+        body.error?.details,
+      );
+    }
+
+    return (await response.json()) as T;
+  } catch (error) {
+    const retriable = error instanceof ApiClientError ? error.statusCode >= 500 : true;
+    if (retriesLeft > 0 && retriable) {
+      input.logger.warn(
+        { err: error, path: input.path, retriesLeft },
+        "API request failed, retrying",
+      );
+      return requestJson<T>({ ...input, retriesLeft: retriesLeft - 1 });
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export class PoolApiClient {
   constructor(
     private readonly config: BotConfig,
     private readonly logger: Logger,
   ) {}
 
-  private async request<T>(path: string, init: RequestInit, retriesLeft = this.config.httpRetryMax): Promise<T> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.config.httpTimeoutMs);
-    try {
-      const response = await fetch(`${this.config.apiBaseUrl}${path}`, {
-        ...init,
-        headers: {
-          "content-type": "application/json",
-          "x-internal-key": this.config.apiInternalKey,
-          ...(init.headers ?? {}),
-        },
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        const body = (await response.json().catch(() => ({}))) as ErrorBody;
-        throw new ApiClientError(
-          response.status,
-          body.error?.message ?? `Request failed with status ${response.status}`,
-          body.error?.code,
-          body.error?.details,
-        );
-      }
-
-      return (await response.json()) as T;
-    } catch (error) {
-      const retriable =
-        error instanceof ApiClientError ? error.statusCode >= 500 : true;
-
-      if (retriesLeft > 0 && retriable) {
-        this.logger.warn({ err: error, path, retriesLeft }, "API request failed, retrying");
-        return this.request<T>(path, init, retriesLeft - 1);
-      }
-      throw error;
-    } finally {
-      clearTimeout(timeout);
-    }
+  private request<T>(path: string, init: RequestInit): Promise<T> {
+    return requestJson<T>({
+      config: this.config,
+      logger: this.logger,
+      path,
+      init,
+      authHeaders: { authorization: `Bearer ${this.config.poolBootstrapKey}` },
+    });
   }
 
-  async bootstrapGuild(guildId: string, payload: InternalBootstrapRequest): Promise<void> {
-    await this.request(`/internal/guilds/${guildId}/bootstrap`, {
+  listAssignments(): Promise<AssignmentListResponse> {
+    return this.request("/internal/runtime/assignments", { method: "GET" });
+  }
+
+  claimBot(botInstanceId: string, claimRequestId: string): Promise<BotClaimResponse> {
+    return this.request(`/internal/runtime/assignments/${botInstanceId}/claim`, {
+      method: "POST",
+      body: JSON.stringify({
+        runtimeInstanceId: this.config.runtimeInstanceId,
+        claimRequestId,
+      }),
+    });
+  }
+}
+
+export class ApiClient {
+  constructor(
+    private readonly config: BotConfig,
+    private readonly logger: Logger,
+    private readonly lease: BotLeaseCredentials,
+  ) {}
+
+  get botInstanceId(): string {
+    return this.lease.botInstanceId;
+  }
+
+  private request<T>(path: string, init: RequestInit): Promise<T> {
+    return requestJson<T>({
+      config: this.config,
+      logger: this.logger,
+      path,
+      init,
+      authHeaders: {
+        authorization: `Bearer ${this.lease.leaseToken}`,
+        "x-bot-instance-id": this.lease.botInstanceId,
+        "x-bot-lease-generation": String(this.lease.leaseGeneration),
+      },
+    });
+  }
+
+  heartbeat(input: {
+    runtimeState?: Exclude<BotRuntimeState, "STOPPED">;
+    connectedAt?: Date;
+    errorCode?: string | null;
+  }): Promise<{ lease: BotRuntimeStatus }> {
+    return this.request(
+      `/internal/runtime/assignments/${this.lease.botInstanceId}/heartbeat`,
+      { method: "POST", body: JSON.stringify(input) },
+    );
+  }
+
+  release(): Promise<{ lease: BotRuntimeStatus }> {
+    return this.request(
+      `/internal/runtime/assignments/${this.lease.botInstanceId}/release`,
+      { method: "POST", body: "{}" },
+    );
+  }
+
+  bootstrapGuild(
+    guildId: string,
+    payload: InternalBootstrapRequest,
+  ): Promise<BootstrapInstallationResponse> {
+    return this.request(`/internal/guilds/${guildId}/bootstrap`, {
       method: "POST",
       body: JSON.stringify(payload),
+    });
+  }
+
+  async markGuildLeft(guildId: string): Promise<void> {
+    await this.request(`/internal/guilds/${guildId}/left`, {
+      method: "POST",
+      body: "{}",
+    });
+  }
+
+  async reportIdentity(payload: {
+    discordApplicationId: string;
+    discordBotUserId: string;
+    discordUsername: string;
+    discordAvatarUrl?: string | null;
+  }): Promise<void> {
+    await this.request("/internal/identity", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async reportCommandManifest(input: {
+    guildId: string;
+    hash?: string | null;
+    errorCode?: string | null;
+    syncedAt?: Date | null;
+  }): Promise<void> {
+    await this.request(`/internal/guilds/${input.guildId}/command-manifest`, {
+      method: "PUT",
+      body: JSON.stringify({
+        hash: input.hash,
+        errorCode: input.errorCode,
+        syncedAt: input.syncedAt,
+      }),
+    });
+  }
+
+  pendingCommandManifests(): Promise<{ items: BotInstallationSummary[] }> {
+    return this.request("/internal/command-manifests/pending", {
+      method: "GET",
+    });
+  }
+
+  acquireEvent(
+    discordEventId: string,
+    eventType: "MESSAGE_CREATE" | "INTERACTION_CREATE",
+  ): Promise<DiscordEventReceiptResponse> {
+    return this.request("/internal/events/receipts", {
+      method: "POST",
+      body: JSON.stringify({ discordEventId, eventType }),
+    });
+  }
+
+  async completeEvent(receiptId: string): Promise<void> {
+    await this.request(`/internal/events/receipts/${receiptId}/complete`, {
+      method: "POST",
+      body: "{}",
+    });
+  }
+
+  async failEvent(receiptId: string, errorCode: string): Promise<void> {
+    await this.request(`/internal/events/receipts/${receiptId}/fail`, {
+      method: "POST",
+      body: JSON.stringify({ errorCode }),
     });
   }
 
@@ -80,14 +260,14 @@ export class ApiClient {
     });
   }
 
-  async checkCommandAccess(input: {
+  checkCommandAccess(input: {
     guildId: string;
     commandKey: string;
     actorDiscordUserId: string;
     channelId?: string;
     defaultMinRole?: "OWNER" | "ADMIN" | "MODERATOR" | "USER";
   }): Promise<CommandCheckResponse> {
-    return this.request<CommandCheckResponse>(
+    return this.request(
       `/internal/guilds/${input.guildId}/commands/${input.commandKey}/check`,
       {
         method: "POST",
@@ -100,13 +280,13 @@ export class ApiClient {
     );
   }
 
-  async readGuildSettings(input: {
+  readGuildSettings(input: {
     guildId: string;
     actorDiscordUserId: string;
     channelId?: string;
     commandKey?: string;
   }): Promise<InternalGuildSettingsResponse> {
-    return this.request<InternalGuildSettingsResponse>(`/internal/guilds/${input.guildId}/settings/read`, {
+    return this.request(`/internal/guilds/${input.guildId}/settings/read`, {
       method: "POST",
       body: JSON.stringify({
         actorDiscordUserId: input.actorDiscordUserId,
@@ -116,12 +296,12 @@ export class ApiClient {
     });
   }
 
-  async listGuildAdmins(input: {
+  listGuildAdmins(input: {
     guildId: string;
     actorDiscordUserId: string;
     channelId?: string;
   }): Promise<InternalAdminListResponse> {
-    return this.request<InternalAdminListResponse>(`/internal/guilds/${input.guildId}/admins/list`, {
+    return this.request(`/internal/guilds/${input.guildId}/admins/list`, {
       method: "POST",
       body: JSON.stringify({
         actorDiscordUserId: input.actorDiscordUserId,
@@ -130,13 +310,13 @@ export class ApiClient {
     });
   }
 
-  async addGuildAdmin(input: {
+  addGuildAdmin(input: {
     guildId: string;
     actorDiscordUserId: string;
     channelId?: string;
     target: InternalUserTouchRequest;
   }): Promise<InternalAdminMutationResponse> {
-    return this.request<InternalAdminMutationResponse>(`/internal/guilds/${input.guildId}/admins/add`, {
+    return this.request(`/internal/guilds/${input.guildId}/admins/add`, {
       method: "POST",
       body: JSON.stringify({
         actorDiscordUserId: input.actorDiscordUserId,
@@ -146,13 +326,13 @@ export class ApiClient {
     });
   }
 
-  async removeGuildAdmin(input: {
+  removeGuildAdmin(input: {
     guildId: string;
     actorDiscordUserId: string;
     channelId?: string;
     target: InternalUserTouchRequest;
   }): Promise<InternalAdminMutationResponse> {
-    return this.request<InternalAdminMutationResponse>(`/internal/guilds/${input.guildId}/admins/remove`, {
+    return this.request(`/internal/guilds/${input.guildId}/admins/remove`, {
       method: "POST",
       body: JSON.stringify({
         actorDiscordUserId: input.actorDiscordUserId,
@@ -162,8 +342,8 @@ export class ApiClient {
     });
   }
 
-  async respondWithLlm(payload: InternalLlmRespondRequest): Promise<InternalLlmRespondResponse> {
-    return this.request<InternalLlmRespondResponse>("/internal/llm/respond", {
+  respondWithLlm(payload: InternalLlmRespondRequest): Promise<InternalLlmRespondResponse> {
+    return this.request("/internal/llm/respond", {
       method: "POST",
       body: JSON.stringify(payload),
     });
@@ -175,14 +355,18 @@ export class ApiClient {
     channelId?: string;
     commandKey?: string;
   }): Promise<InternalLlmSettingsResponse> {
-    return this.request<InternalLlmSettingsResponse>(`/internal/guilds/${input.guildId}/llm/settings/read`, {
-      method: "POST",
-      body: JSON.stringify({
-        actorDiscordUserId: input.actorDiscordUserId,
-        channelId: input.channelId,
-        commandKey: input.commandKey ?? "ai.status",
-      }),
-    });
+    const response = await this.request<EffectiveSettingsWireResponse>(
+      `/internal/guilds/${input.guildId}/llm/settings/read`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          actorDiscordUserId: input.actorDiscordUserId,
+          channelId: input.channelId,
+          commandKey: input.commandKey ?? "ai.status",
+        }),
+      },
+    );
+    return normalizeLlmSettings(response);
   }
 
   async patchLlmGuildSettings(input: {
@@ -192,24 +376,31 @@ export class ApiClient {
     commandKey?: string;
     patch: {
       enabled?: boolean;
-      defaultModel?: string;
       assistantPrompt?: string | null;
       gatekeeperPrompt?: string | null;
       retentionDays?: number;
-      dmEnabled?: boolean;
       maxInputChars?: number;
       maxOutputTokens?: number;
     };
   }): Promise<InternalLlmSettingsResponse> {
-    return this.request<InternalLlmSettingsResponse>(`/internal/guilds/${input.guildId}/llm/settings`, {
-      method: "PATCH",
-      body: JSON.stringify({
-        actorDiscordUserId: input.actorDiscordUserId,
-        channelId: input.channelId,
-        commandKey: input.commandKey ?? "ai.prompt.set",
-        ...input.patch,
-      }),
-    });
+    const response = await this.request<EffectiveSettingsWireResponse>(
+      `/internal/guilds/${input.guildId}/llm/settings`,
+      {
+        method: "PATCH",
+        body: JSON.stringify({
+          actorDiscordUserId: input.actorDiscordUserId,
+          channelId: input.channelId,
+          commandKey: input.commandKey ?? "ai.prompt.set",
+          llmEnabledByGuild: input.patch.enabled,
+          assistantPromptOverride: input.patch.assistantPrompt,
+          gatekeeperPromptOverride: input.patch.gatekeeperPrompt,
+          retentionDaysOverride: input.patch.retentionDays,
+          maxInputCharsOverride: input.patch.maxInputChars,
+          maxOutputTokensOverride: input.patch.maxOutputTokens,
+        }),
+      },
+    );
+    return normalizeLlmSettings(response);
   }
 
   async enableLlmChannel(input: {
@@ -246,13 +437,13 @@ export class ApiClient {
     });
   }
 
-  async clearLlmChannelMemory(input: {
+  clearLlmChannelMemory(input: {
     guildId: string;
     actorDiscordUserId: string;
     channelId: string;
     commandKey?: string;
   }): Promise<{ deletedMessages: number; deletedConversations: number }> {
-    return this.request<{ deletedMessages: number; deletedConversations: number }>(
+    return this.request(
       `/internal/guilds/${input.guildId}/llm/channels/memory/clear`,
       {
         method: "POST",
@@ -264,4 +455,35 @@ export class ApiClient {
       },
     );
   }
+}
+
+function normalizeLlmSettings(
+  response: EffectiveSettingsWireResponse,
+): InternalLlmSettingsResponse {
+  const {
+    settings,
+    effective,
+    installation,
+    effectiveAiEnabled,
+    effectivePrompts,
+  } = response;
+  return {
+    guild: {
+      id: installation.guildId,
+      name: installation.guildName,
+    },
+    settings: {
+      enabled: settings.llmEnabledByGuild,
+      platformEnabled: settings.llmEnabledByPlatform,
+      defaultModel: effective.model,
+      assistantPrompt: effective.assistantPrompt,
+      gatekeeperPrompt: effective.gatekeeperPrompt,
+      retentionDays: effective.retentionDays,
+      dmEnabled: effective.dmEnabled,
+      maxInputChars: effective.maxInputChars,
+      maxOutputTokens: effective.maxOutputTokens,
+    },
+    effectiveAiEnabled,
+    effectivePrompts,
+  };
 }

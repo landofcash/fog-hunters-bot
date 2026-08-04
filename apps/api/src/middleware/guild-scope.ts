@@ -11,28 +11,10 @@ export async function requireGuildScope(request: FastifyRequest<{ Params: GuildP
     throw new ApiError(401, "UNAUTHENTICATED", "Authentication required.");
   }
 
-  if (auth.platformRole === "PLATFORM_ADMIN") {
-    const settings = await request.server.repository.getGuildSettings(request.params.guildId);
-    if (!settings) {
-      throw new ApiError(404, "GUILD_NOT_FOUND", "Guild not found.");
-    }
-
-    request.guildContext = {
-      guild: settings.guild,
-      membership: {
-        guildId: settings.guild.id,
-        userId: auth.userId,
-        tenantRole: "OWNER",
-        status: "ACTIVE",
-      },
-    };
-    return;
-  }
-
   const context = await request.server.repository.ensureGuildMembership(request.params.guildId, auth.userId);
   if (!context) {
-    const settings = await request.server.repository.getGuildSettings(request.params.guildId);
-    if (!settings) {
+    const guild = await request.server.repository.getGuildByDiscordId(request.params.guildId);
+    if (!guild) {
       throw new ApiError(404, "GUILD_NOT_FOUND", "Guild not found.");
     }
     throw new ApiError(403, "GUILD_ACCESS_DENIED", "You do not have access to this guild.");

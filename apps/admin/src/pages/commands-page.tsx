@@ -31,10 +31,14 @@ function csvToIds(value: string): string[] {
 
 function CommandCard({
   guildId,
+  botId,
   command,
+  readOnly,
 }: {
   guildId: string;
+  botId: string;
   command: CommandPermission;
+  readOnly: boolean;
 }) {
   const [minRole, setMinRole] = useState<TenantRole>(command.minRole);
   const [allow, setAllow] = useState(command.allowChannels.join(", "));
@@ -47,13 +51,13 @@ function CommandCard({
 
   const save = useMutation({
     mutationFn: () =>
-      api.updateCommand(guildId, command.commandKey, {
+      api.updateCommand(guildId, botId, command.commandKey, {
         minRole,
         allowChannels: csvToIds(allow),
         denyChannels: csvToIds(deny),
       }),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["guild", guildId, "settings"] });
+      await queryClient.invalidateQueries({ queryKey: ["guild", guildId, "bot", botId, "settings"] });
       toast.success(`/${command.commandKey.replaceAll(".", " ")} permission saved`);
     },
     onError: (error) => toast.error(error.message),
@@ -82,7 +86,11 @@ function CommandCard({
           <div className="grid flex-[2] gap-4 sm:grid-cols-[170px_1fr_1fr]">
             <div className="grid gap-2">
               <Label>Minimum role</Label>
-              <Select value={minRole} onValueChange={(value) => setMinRole(value as TenantRole)}>
+              <Select
+                value={minRole}
+                disabled={readOnly}
+                onValueChange={(value) => setMinRole(value as TenantRole)}
+              >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -95,16 +103,16 @@ function CommandCard({
             </div>
             <div className="grid gap-2">
               <Label>Allowed channel IDs</Label>
-              <Input value={allow} onChange={(event) => setAllow(event.target.value)} placeholder="Empty means all" />
+              <Input disabled={readOnly} value={allow} onChange={(event) => setAllow(event.target.value)} placeholder="Empty means all" />
             </div>
             <div className="grid gap-2">
               <Label>Denied channel IDs</Label>
-              <Input value={deny} onChange={(event) => setDeny(event.target.value)} placeholder="Denied wins" />
+              <Input disabled={readOnly} value={deny} onChange={(event) => setDeny(event.target.value)} placeholder="Denied wins" />
             </div>
           </div>
           <Button
             size="sm"
-            disabled={!dirty || save.isPending}
+            disabled={readOnly || !dirty || save.isPending}
             onClick={() => save.mutate()}
           >
             <Save className="size-3.5" />
@@ -117,10 +125,10 @@ function CommandCard({
 }
 
 export function CommandsPage() {
-  const { guildId = "" } = useParams();
+  const { guildId = "", botId = "" } = useParams();
   const settings = useQuery({
-    queryKey: ["guild", guildId, "settings"],
-    queryFn: () => api.guildSettings(guildId),
+    queryKey: ["guild", guildId, "bot", botId, "settings"],
+    queryFn: () => api.guildSettings(guildId, botId),
   });
 
   return (
@@ -132,9 +140,20 @@ export function CommandsPage() {
         action={<Badge variant="outline">{settings.data?.commands.length ?? 0} policies</Badge>}
       />
       {settings.error ? <ErrorState error={settings.error} /> : null}
+      {settings.data?.installation.presenceStatus === "LEFT" ? (
+        <div className="rounded-xl border border-amber-300/15 bg-amber-400/7 px-4 py-3 text-sm text-amber-100">
+          Command policies are read-only while the bot is absent.
+        </div>
+      ) : null}
       <div className="space-y-3">
         {settings.data?.commands.map((command) => (
-          <CommandCard key={command.commandKey} guildId={guildId} command={command} />
+          <CommandCard
+            key={command.commandKey}
+            guildId={guildId}
+            botId={botId}
+            command={command}
+            readOnly={settings.data.installation.presenceStatus !== "PRESENT"}
+          />
         ))}
       </div>
       {!settings.isLoading && settings.data?.commands.length === 0 ? (

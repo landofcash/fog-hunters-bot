@@ -48,7 +48,7 @@ describe("message create event", () => {
     expect(channelSend).toHaveBeenNthCalledWith(3, { content: "x" });
   });
 
-  it("silently logs expected denials and warns for unexpected failures", async () => {
+  it("silently logs expected denials and propagates unexpected failures", async () => {
     const deniedLogger = createLoggerMock();
     await handleMessageCreateEvent({
       message: createMessageMock(),
@@ -59,7 +59,13 @@ describe("message create event", () => {
     expect(deniedLogger.warn).not.toHaveBeenCalled();
 
     const failedLogger = createLoggerMock();
-    await handleMessageCreateEvent({ message: createMessageMock(), apiClient: createApiClientMock({ respondWithLlm: vi.fn().mockRejectedValue(new Error("offline")) }), logger: failedLogger });
+    await expect(handleMessageCreateEvent({
+      message: createMessageMock(),
+      apiClient: createApiClientMock({
+        respondWithLlm: vi.fn().mockRejectedValue(new Error("offline")),
+      }),
+      logger: failedLogger,
+    })).rejects.toThrow("offline");
     expect(failedLogger.warn).toHaveBeenCalled();
   });
 });
@@ -150,5 +156,27 @@ describe("message response buffer", () => {
       content: "Hello in DM",
       contextMessages: [],
     }));
+  });
+
+  it("rejects every buffered receipt waiter when batch processing fails", async () => {
+    vi.useFakeTimers();
+    const apiClient = createApiClientMock({
+      respondWithLlm: vi.fn().mockRejectedValue(new Error("offline")),
+    });
+    const buffer = new MessageResponseBuffer(apiClient, createLoggerMock());
+
+    const first = buffer.enqueueAndWait(
+      createMessageMock({ id: "message-1", content: "First part" }),
+    );
+    const second = buffer.enqueueAndWait(
+      createMessageMock({
+        id: "message-2",
+        content: "<@bot-1> second part",
+        mentions: { has: vi.fn().mockReturnValue(true) },
+      }),
+    );
+
+    await expect(first).rejects.toThrow("offline");
+    await expect(second).rejects.toThrow("offline");
   });
 });

@@ -11,6 +11,9 @@ const LoginPage = lazy(() =>
 const GuildDirectoryPage = lazy(() =>
   import("@/pages/guild-directory-page").then((module) => ({ default: module.GuildDirectoryPage })),
 );
+const GuildBotRedirect = lazy(() =>
+  import("@/pages/guild-bot-redirect").then((module) => ({ default: module.GuildBotRedirect })),
+);
 const OverviewPage = lazy(() =>
   import("@/pages/overview-page").then((module) => ({ default: module.OverviewPage })),
 );
@@ -32,8 +35,8 @@ const AuditPage = lazy(() =>
 const OperationsPage = lazy(() =>
   import("@/pages/operations-page").then((module) => ({ default: module.OperationsPage })),
 );
-const PlatformGuildsPage = lazy(() =>
-  import("@/pages/platform-guilds-page").then((module) => ({ default: module.PlatformGuildsPage })),
+const PlatformBotsPage = lazy(() =>
+  import("@/pages/platform-bots-page").then((module) => ({ default: module.PlatformBotsPage })),
 );
 
 function RouteFallback() {
@@ -80,14 +83,15 @@ function AuthenticatedRoutes() {
       <Routes>
         <Route element={<AppLayout />}>
           <Route path="/guilds" element={<GuildDirectoryPage />} />
-          <Route path="/guilds/:guildId/overview" element={<OverviewPage />} />
-          <Route path="/guilds/:guildId/ai" element={<AiSettingsPage />} />
-          <Route path="/guilds/:guildId/channels" element={<ChannelsPage />} />
-          <Route path="/guilds/:guildId/commands" element={<CommandsPage />} />
+          <Route path="/guilds/:guildId" element={<GuildBotRedirect />} />
+          <Route path="/guilds/:guildId/bots/:botId/overview" element={<OverviewPage />} />
+          <Route path="/guilds/:guildId/bots/:botId/ai" element={<AiSettingsPage />} />
+          <Route path="/guilds/:guildId/bots/:botId/channels" element={<ChannelsPage />} />
+          <Route path="/guilds/:guildId/bots/:botId/commands" element={<CommandsPage />} />
           <Route path="/guilds/:guildId/administrators" element={<AdministratorsPage />} />
-          <Route path="/guilds/:guildId/audit" element={<AuditPage />} />
-          <Route path="/guilds/:guildId/operations" element={<OperationsPage />} />
-          <Route path="/platform/guilds" element={<PlatformGuildsPage />} />
+          <Route path="/guilds/:guildId/bots/:botId/audit" element={<AuditPage />} />
+          <Route path="/guilds/:guildId/bots/:botId/operations" element={<OperationsPage />} />
+          <Route path="/platform/bots" element={<PlatformBotsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/guilds" replace />} />
       </Routes>

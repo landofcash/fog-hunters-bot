@@ -1,3 +1,98 @@
+export type BotRuntimeState =
+  | "STOPPED"
+  | "CLAIMED"
+  | "CONNECTING"
+  | "READY"
+  | "BACKOFF"
+  | "ERROR"
+  | "QUARANTINED";
+
+export interface BotSummary {
+  id: string;
+  slug: string;
+  displayName: string;
+  discordApplicationId: string;
+  discordBotUserId?: string | null;
+  discordUsername?: string | null;
+  discordAvatarUrl?: string | null;
+  desiredStatus: "DRAFT" | "ACTIVE" | "DISABLED";
+  tokenVersion: number;
+  tokenConfigured: boolean;
+}
+
+export interface BotProfileResponse {
+  id: string;
+  botInstanceId: string;
+  defaultModel: string;
+  assistantPrompt?: string | null;
+  gatekeeperPrompt?: string | null;
+  dmEnabled: boolean;
+  retentionDays: number;
+  maxInputChars: number;
+  maxOutputTokens: number;
+}
+
+export interface BotInstallationSummary {
+  id: string;
+  botInstanceId: string;
+  guildId: string;
+  guildDiscordId: string;
+  guildName: string;
+  presenceStatus: "PRESENT" | "LEFT";
+  operationalStatus: "ENABLED" | "DISABLED";
+  lastCommandManifestHash?: string | null;
+  lastCommandSyncAt?: string | null;
+  lastCommandSyncErrorCode?: string | null;
+}
+
+export interface BootstrapInstallationResponse {
+  installation: BotInstallationSummary;
+  installationCreated: boolean;
+}
+
+export interface BotRuntimeStatus {
+  botInstanceId: string;
+  runtimeInstanceId?: string | null;
+  claimRequestId?: string | null;
+  leaseGeneration: number;
+  runtimeState: BotRuntimeState;
+  expiresAt?: string | null;
+  lastHeartbeatAt?: string | null;
+  lastConnectedAt?: string | null;
+  lastErrorCode?: string | null;
+  claimedTokenVersion?: number | null;
+  revokedAt?: string | null;
+}
+
+export interface BotRuntimeAssignment {
+  botInstanceId: string;
+  slug: string;
+  displayName: string;
+  discordApplicationId: string;
+  tokenVersion: number;
+  runtime: BotRuntimeStatus;
+}
+
+export interface AssignmentListResponse {
+  items: BotRuntimeAssignment[];
+  pollAfterMs: number;
+}
+
+export interface BotClaimResponse {
+  bot: BotSummary;
+  profile: BotProfileResponse;
+  lease: BotRuntimeStatus;
+  leaseToken: string;
+  discordToken: string;
+  heartbeatAfterMs: number;
+}
+
+export interface BotLeaseCredentials {
+  botInstanceId: string;
+  leaseGeneration: number;
+  leaseToken: string;
+}
+
 export interface InternalBootstrapRequest {
   guildName: string;
   owner?: {
@@ -37,7 +132,6 @@ export interface InternalAdminMutationResponse {
     tenantRole: "OWNER" | "ADMIN" | "MODERATOR" | "USER";
     status: "ACTIVE" | "INVITED" | "REMOVED";
   } | null;
-  auditLogId?: string;
 }
 
 export interface CommandCheckResponse {
@@ -58,27 +152,16 @@ export interface CommandCheckResponse {
 export interface InternalGuildSettingsResponse {
   guild: {
     id: string;
-    discordGuildId: string;
-    name: string;
+    guildId: string;
+    botInstanceId: string;
+    presenceStatus: "PRESENT" | "LEFT";
+    operationalStatus: "ENABLED" | "DISABLED";
   };
-  features: Array<{
-    id: string;
-    guildId: string;
-    featureKey: string;
-    enabled: boolean;
-    version: number;
-    configJson: Record<string, unknown>;
-    updatedAt: string;
-  }>;
-  commands: Array<{
-    id: string;
-    guildId: string;
-    commandKey: string;
-    minRole: "OWNER" | "ADMIN" | "MODERATOR" | "USER";
-    allowChannels: string[];
-    denyChannels: string[];
-    updatedAt: string;
-  }>;
+  bot: BotSummary;
+  settings: {
+    llmEnabledByGuild: boolean;
+    llmEnabledByPlatform: boolean;
+  };
 }
 
 export interface InternalLlmRespondRequest {
@@ -112,15 +195,12 @@ export interface InternalLlmRespondResponse {
   };
 }
 
-export interface LlmGuildSettingsEnvelope {
+export interface InternalLlmSettingsResponse {
   guild: {
     id: string;
-    discordGuildId: string;
     name: string;
   };
   settings: {
-    id: string;
-    guildId: string;
     enabled: boolean;
     platformEnabled: boolean;
     defaultModel: string;
@@ -130,22 +210,19 @@ export interface LlmGuildSettingsEnvelope {
     dmEnabled: boolean;
     maxInputChars: number;
     maxOutputTokens: number;
-    createdAt: string;
-    updatedAt: string;
   };
+  effectiveAiEnabled: boolean;
   effectivePrompts: {
     assistant: string;
     gatekeeper: string;
   };
 }
 
-export interface InternalLlmSettingsResponse {
-  guild: {
+export interface DiscordEventReceiptResponse {
+  receipt: {
     id: string;
-    discordGuildId: string;
-    name: string;
+    processingStatus: "RECEIVED" | "PROCESSING" | "COMPLETED" | "FAILED";
+    attemptCount: number;
   };
-  settings: LlmGuildSettingsEnvelope["settings"];
-  effectiveAiEnabled: boolean;
-  effectivePrompts: LlmGuildSettingsEnvelope["effectivePrompts"];
+  acquired: boolean;
 }

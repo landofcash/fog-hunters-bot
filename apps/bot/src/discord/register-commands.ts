@@ -1,5 +1,7 @@
 import { REST, Routes, SlashCommandBuilder } from "discord.js";
+import { createHash } from "node:crypto";
 import type { Logger } from "pino";
+import type { ApiClient } from "../api/client";
 
 export const commandDefinitions = [
   new SlashCommandBuilder().setName("ping").setDescription("Check bot latency and availability."),
@@ -155,6 +157,10 @@ export const commandDefinitions = [
     ),
 ].map((command) => command.toJSON());
 
+export const commandManifestHash = createHash("sha256")
+  .update(JSON.stringify(commandDefinitions))
+  .digest("hex");
+
 export async function registerGuildCommands(input: {
   botToken: string;
   clientId: string;
@@ -167,4 +173,47 @@ export async function registerGuildCommands(input: {
     { body: commandDefinitions },
   );
   input.logger.info({ guildId: input.guildId }, "Guild slash commands synchronized");
+}
+
+export async function synchronizeGuildCommands(input: {
+  apiClient: ApiClient;
+  botToken: string;
+  clientId: string;
+  guildId: string;
+  previousHash?: string | null;
+  previousErrorCode?: string | null;
+  logger: Logger;
+}): Promise<boolean> {
+  if (
+    input.previousHash === commandManifestHash &&
+    !input.previousErrorCode
+  ) {
+    input.logger.debug(
+      { guildId: input.guildId, commandManifestHash },
+      "Guild command manifest already current",
+    );
+    return false;
+  }
+
+  try {
+    await registerGuildCommands(input);
+    await input.apiClient.reportCommandManifest({
+      guildId: input.guildId,
+      hash: commandManifestHash,
+      errorCode: null,
+      syncedAt: new Date(),
+    });
+    return true;
+  } catch (error) {
+    await input.apiClient.reportCommandManifest({
+      guildId: input.guildId,
+      errorCode: "COMMAND_SYNC_FAILED",
+    }).catch((reportError) => {
+      input.logger.warn(
+        { err: reportError, guildId: input.guildId },
+        "Failed to report command synchronization error",
+      );
+    });
+    throw error;
+  }
 }

@@ -1,0 +1,221 @@
+import { EventEmitter } from "node:events";
+import { Events, type Client } from "discord.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { BotClaimResponse } from "../src/api/contracts";
+import { ManagedBotRuntime } from "../src/runtime/managed-bot-runtime";
+import { createBotConfig, createLoggerMock } from "./helpers/fixtures";
+
+const runtimeMocks = vi.hoisted(() => ({
+  client: undefined as unknown as Client,
+  heartbeat: vi.fn(),
+  reportIdentity: vi.fn(),
+  pendingCommandManifests: vi.fn(),
+  handleReadyEvent: vi.fn(),
+}));
+
+vi.mock("../src/api/client", () => ({
+  ApiClient: class {
+    readonly botInstanceId = "bot-1";
+    heartbeat = runtimeMocks.heartbeat;
+    reportIdentity = runtimeMocks.reportIdentity;
+    pendingCommandManifests = runtimeMocks.pendingCommandManifests;
+  },
+}));
+
+vi.mock("../src/discord/client", () => ({
+  createDiscordClient: () => runtimeMocks.client,
+}));
+
+vi.mock("../src/events/ready", () => ({
+  handleReadyEvent: runtimeMocks.handleReadyEvent,
+}));
+
+function createClaim(): BotClaimResponse {
+  return {
+    bot: {
+      id: "bot-1",
+      slug: "bot-one",
+      displayName: "Bot One",
+      discordApplicationId: "application-1",
+      desiredStatus: "ACTIVE",
+      tokenVersion: 1,
+      tokenConfigured: true,
+    },
+    profile: {
+      id: "profile-1",
+      botInstanceId: "bot-1",
+      defaultModel: "gpt-test",
+      dmEnabled: true,
+      retentionDays: 30,
+      maxInputChars: 4_000,
+      maxOutputTokens: 512,
+    },
+    lease: {
+      botInstanceId: "bot-1",
+      runtimeInstanceId: "runtime-1",
+      leaseGeneration: 3,
+      runtimeState: "CLAIMED",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      claimedTokenVersion: 1,
+    },
+    leaseToken: "lease-token",
+    discordToken: "discord-token",
+    heartbeatAfterMs: 15_000,
+  };
+}
+
+class FakeDiscordClient extends EventEmitter {
+  readonly application = { id: "application-1" };
+  readonly user = {
+    id: "bot-user-1",
+    username: "bot-one",
+    displayAvatarURL: () => null,
+  };
+  readonly guilds = { cache: new Map() };
+  readonly destroy = vi.fn();
+  readonly login = vi.fn(async () => {
+    queueMicrotask(() => this.emit(Events.ClientReady, this));
+    return "discord-token";
+  });
+}
+
+describe("ManagedBotRuntime", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ now: new Date("2026-08-03T12:00:00Z") });
+    runtimeMocks.client = new FakeDiscordClient() as unknown as Client;
+    runtimeMocks.reportIdentity.mockResolvedValue(undefined);
+    runtimeMocks.pendingCommandManifests.mockResolvedValue({ items: [] });
+    runtimeMocks.heartbeat.mockImplementation(async (input: { runtimeState: string }) => ({
+      lease: {
+        botInstanceId: "bot-1",
+        runtimeInstanceId: "runtime-1",
+        leaseGeneration: 3,
+        runtimeState: input.runtimeState,
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        claimedTokenVersion: 1,
+      },
+    }));
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("renews the lease while Discord ready reconciliation is still running", async () => {
+    let finishReady!: () => void;
+    runtimeMocks.handleReadyEvent.mockReturnValue(new Promise<void>((resolve) => {
+      finishReady = resolve;
+    }));
+    const client = runtimeMocks.client as unknown as FakeDiscordClient;
+    const logger = createLoggerMock();
+    Object.assign(logger, { child: vi.fn().mockReturnValue(logger) });
+    const runtime = new ManagedBotRuntime(
+      createBotConfig(),
+      createClaim(),
+      logger,
+      vi.fn(),
+    );
+
+    const start = runtime.start();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(runtimeMocks.handleReadyEvent).toHaveBeenCalledTimes(1);
+    expect(runtimeMocks.heartbeat).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(runtimeMocks.heartbeat).toHaveBeenNthCalledWith(2, {
+      runtimeState: "CONNECTING",
+      errorCode: null,
+    });
+    expect(client.destroy).not.toHaveBeenCalled();
+
+    finishReady();
+    await vi.advanceTimersByTimeAsync(0);
+    await start;
+    await runtime.stop({ releaseLease: false, reason: "test complete" });
+  });
+
+  it("keeps a renewed runtime ready when pending command polling fails", async () => {
+    runtimeMocks.handleReadyEvent.mockResolvedValue(undefined);
+    runtimeMocks.pendingCommandManifests.mockRejectedValue(new Error("manifest API unavailable"));
+    const client = runtimeMocks.client as unknown as FakeDiscordClient;
+    const logger = createLoggerMock();
+    Object.assign(logger, { child: vi.fn().mockReturnValue(logger) });
+    const runtime = new ManagedBotRuntime(
+      createBotConfig(),
+      createClaim(),
+      logger,
+      vi.fn(),
+    );
+
+    const start = runtime.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await start;
+    expect(runtime.runtimeState).toBe("READY");
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(runtimeMocks.pendingCommandManifests).toHaveBeenCalledTimes(1);
+    expect(runtime.runtimeState).toBe("READY");
+    expect(client.destroy).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      { err: expect.any(Error) },
+      "Pending command manifest polling failed; lease remains healthy",
+    );
+
+    await runtime.stop({ releaseLease: false, reason: "test complete" });
+  });
+
+  it("terminates once and stops heartbeats at the lease safety margin", async () => {
+    runtimeMocks.handleReadyEvent.mockResolvedValue(undefined);
+    let successfulHeartbeats = 0;
+    runtimeMocks.heartbeat.mockImplementation(async (input: { runtimeState: string }) => {
+      if (successfulHeartbeats >= 2) {
+        throw new Error("API unavailable");
+      }
+      successfulHeartbeats += 1;
+      return {
+        lease: {
+          botInstanceId: "bot-1",
+          runtimeInstanceId: "runtime-1",
+          leaseGeneration: 3,
+          runtimeState: input.runtimeState,
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          claimedTokenVersion: 1,
+        },
+      };
+    });
+    const client = runtimeMocks.client as unknown as FakeDiscordClient;
+    const logger = createLoggerMock();
+    Object.assign(logger, { child: vi.fn().mockReturnValue(logger) });
+    const onTerminal = vi.fn();
+    const runtime = new ManagedBotRuntime(
+      createBotConfig(),
+      createClaim(),
+      logger,
+      onTerminal,
+    );
+
+    const start = runtime.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await start;
+
+    await vi.advanceTimersByTimeAsync(40_000);
+
+    expect(onTerminal).toHaveBeenCalledTimes(1);
+    expect(onTerminal).toHaveBeenCalledWith(
+      runtime,
+      "LEASE_SAFETY_MARGIN_REACHED",
+    );
+    expect(runtime.runtimeState).toBe("STOPPED");
+    expect(client.destroy).toHaveBeenCalledTimes(1);
+
+    const heartbeatCountAtTermination = runtimeMocks.heartbeat.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(runtimeMocks.heartbeat).toHaveBeenCalledTimes(heartbeatCountAtTermination);
+    expect(onTerminal).toHaveBeenCalledTimes(1);
+    expect(client.destroy).toHaveBeenCalledTimes(1);
+  });
+});

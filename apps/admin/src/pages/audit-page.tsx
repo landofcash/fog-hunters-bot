@@ -30,11 +30,11 @@ function JsonBlock({ title, value }: { title: string; value: unknown }) {
 }
 
 export function AuditPage() {
-  const { guildId = "" } = useParams();
+  const { guildId = "", botId = "" } = useParams();
   const [selected, setSelected] = useState<AuditLog>();
   const audit = useQuery({
-    queryKey: ["guild", guildId, "audit"],
-    queryFn: () => api.audit(guildId),
+    queryKey: ["guild", guildId, "bot", botId, "audit"],
+    queryFn: () => api.audit(guildId, botId),
   });
 
   return (

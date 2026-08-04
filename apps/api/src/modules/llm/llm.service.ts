@@ -7,8 +7,8 @@ import type { AppConfig } from "../../lib/config";
 import { ApiError } from "../../lib/errors";
 import type {
   AppRepository,
+  EffectiveBotSettings,
   LlmConversationRecord,
-  LlmGuildSettingsRecord,
   LlmMessageRecord,
 } from "../../repositories/types";
 import { createLlmProvider } from "./providers/provider-router";
@@ -123,6 +123,7 @@ function parseDecision(raw: string): LlmDecision | null {
 }
 
 export interface InternalLlmRespondInput {
+  botInstanceId: string;
   guildId?: string;
   channelId?: string;
   discordUserId: string;
@@ -216,7 +217,7 @@ export class LlmService {
     botWasMentioned: boolean;
     content: string;
     recentMessages: LlmMessageRecord[];
-    guildSettings?: LlmGuildSettingsRecord;
+    settings?: EffectiveBotSettings;
     guildId?: string;
     channelId?: string;
   }): Promise<LlmDecision> {
@@ -236,7 +237,7 @@ export class LlmService {
     const decisionMessages: LlmChatMessage[] = [
       {
         role: "system",
-        content: buildGatekeeperPrompt(input.guildSettings),
+        content: buildGatekeeperPrompt(input.settings),
       },
       {
         role: "user",
@@ -297,34 +298,78 @@ export class LlmService {
       };
     }
 
-    let guildSettings: LlmGuildSettingsRecord | undefined;
+    let settings: EffectiveBotSettings;
     let guildInternalId: string | undefined;
+    let botInstallationId: string | undefined;
     let mentionRequired = false;
 
-    if (!input.isDm) {
+    if (input.isDm) {
+      if (input.guildId) {
+        throw new ApiError(400, "LLM_SCOPE_INVALID", "DM requests cannot select a guild installation.");
+      }
+      settings = await this.repository.getEffectiveBotSettings({
+        botInstanceId: input.botInstanceId,
+      });
+      if (!settings.dmEnabled) {
+        return {
+          shouldRespond: false,
+          reason: "DM_DISABLED",
+        };
+      }
+    } else {
       if (!input.guildId || !input.channelId) {
         throw new ApiError(400, "LLM_SCOPE_INVALID", "guildId and channelId are required for guild messages.");
       }
 
-      const guildSettingsResult = await this.repository.getOrCreateLlmGuildSettings(input.guildId);
-      guildSettings = guildSettingsResult.settings;
-      guildInternalId = guildSettingsResult.guild.id;
+      settings = await this.repository.getEffectiveBotSettings({
+        botInstanceId: input.botInstanceId,
+        guildDiscordId: input.guildId,
+      });
+      const installation = settings.installation;
+      const installationSettings = settings.installationSettings;
+      if (!installation || !installationSettings) {
+        throw new ApiError(404, "BOT_NOT_INSTALLED", "The bot is not installed in this guild.");
+      }
+      guildInternalId = installation.guildId;
+      botInstallationId = installation.id;
 
-      if (!guildSettings.platformEnabled) {
+      if (installation.guildStatus !== "ACTIVE") {
+        return {
+          shouldRespond: false,
+          reason: "GUILD_DISABLED",
+        };
+      }
+      if (installation.presenceStatus !== "PRESENT") {
+        return {
+          shouldRespond: false,
+          reason: "BOT_NOT_INSTALLED",
+        };
+      }
+      if (installation.operationalStatus !== "ENABLED") {
+        return {
+          shouldRespond: false,
+          reason: "BOT_DISABLED",
+        };
+      }
+      if (!installationSettings.llmEnabledByPlatform) {
         return {
           shouldRespond: false,
           reason: "LLM_DISABLED_BY_PLATFORM",
         };
       }
 
-      if (!guildSettings.enabled) {
+      if (!installationSettings.llmEnabledByGuild) {
         return {
           shouldRespond: false,
           reason: "LLM_DISABLED",
         };
       }
 
-      const channelSettings = await this.repository.getLlmChannelSettings(input.guildId, input.channelId);
+      const channelSettings = await this.repository.getLlmChannelSettings(
+        input.botInstanceId,
+        input.guildId,
+        input.channelId,
+      );
       if (!channelSettings?.enabled) {
         if (!input.botWasMentioned) {
           return {
@@ -339,13 +384,14 @@ export class LlmService {
 
     const scopeType = input.isDm ? "DM" : "GUILD_CHANNEL";
     const conversation = await this.repository.getOrCreateConversation({
+      botInstanceId: input.botInstanceId,
       type: scopeType,
       guildDiscordId: input.guildId,
       channelId: input.channelId,
       discordUserId: input.discordUserId,
     });
 
-    const maxInputChars = guildSettings?.maxInputChars ?? this.config.llmMaxInputChars;
+    const maxInputChars = Math.min(settings.maxInputChars, this.config.llmMaxInputChars);
     for (const contextMessage of (input.contextMessages ?? []).slice(-19)) {
       const contextContent = contextMessage.content.trim();
       if (!contextContent) {
@@ -377,7 +423,7 @@ export class LlmService {
     }
 
     const recentMessages = await this.repository.listRecentConversationMessages(conversation.id, 20);
-    const model = guildSettings?.defaultModel ?? this.config.llmDefaultModel;
+    const model = settings.model;
 
     const decision = await this.decideShouldRespond({
       model,
@@ -385,7 +431,7 @@ export class LlmService {
       botWasMentioned: input.botWasMentioned,
       content,
       recentMessages,
-      guildSettings,
+      settings,
       guildId: input.guildId,
       channelId: input.channelId,
     });
@@ -409,12 +455,12 @@ export class LlmService {
     const generationContext = await this.repository.listRecentConversationMessages(conversation.id, 20);
 
     const maxOutputTokens = Math.min(
-      guildSettings?.maxOutputTokens ?? this.config.llmMaxOutputTokens,
+      settings.maxOutputTokens,
       this.config.llmMaxOutputTokens,
     );
 
     const promptMessages = buildMessages({
-      systemPrompt: effectiveAssistantPrompt(guildSettings),
+      systemPrompt: effectiveAssistantPrompt(settings),
       summary: conversation.summaryText,
       recentMessages: generationContext.filter((message) => message.id !== currentMessage.id),
       currentContent: content,
@@ -457,6 +503,8 @@ export class LlmService {
 
       await this.repository.recordLlmGeneration({
         conversationId: conversation.id,
+        botInstanceId: input.botInstanceId,
+        botInstallationId,
         guildId: guildInternalId,
         provider: this.config.llmProvider,
         model,
@@ -478,6 +526,8 @@ export class LlmService {
 
       await this.repository.recordLlmGeneration({
         conversationId: conversation.id,
+        botInstanceId: input.botInstanceId,
+        botInstallationId,
         guildId: guildInternalId,
         provider: this.config.llmProvider,
         model,
@@ -490,6 +540,8 @@ export class LlmService {
       });
 
       await this.repository.recordLlmModerationEvent({
+        botInstanceId: input.botInstanceId,
+        botInstallationId,
         guildId: guildInternalId,
         conversationId: conversation.id,
         category: "generation_error",

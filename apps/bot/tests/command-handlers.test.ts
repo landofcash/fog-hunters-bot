@@ -21,14 +21,20 @@ describe("protected command handlers", () => {
   it("renders settings summaries and maps access errors", async () => {
     const successClient = createApiClientMock({
       readGuildSettings: vi.fn().mockResolvedValue({
-        guild: { name: "Guild" },
-        features: [{ enabled: true }, { enabled: false }],
-        commands: [{ commandKey: "settings.view" }],
+        guild: {
+          presenceStatus: "PRESENT",
+          operationalStatus: "ENABLED",
+        },
+        bot: { displayName: "Guild Assistant" },
+        settings: {
+          llmEnabledByGuild: true,
+          llmEnabledByPlatform: true,
+        },
       }),
     });
     const success = createInteractionMock({ commandName: "settings" });
     await handleSettingsViewCommand(successClient, success);
-    expect(success.editReply).toHaveBeenCalledWith({ content: expect.stringContaining("Features: **1/2**") });
+    expect(success.editReply).toHaveBeenCalledWith({ content: expect.stringContaining("Bot: **Guild Assistant**") });
 
     for (const [statusCode, message] of [
       [403, "do not have permission"],

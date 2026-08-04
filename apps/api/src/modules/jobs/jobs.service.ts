@@ -14,12 +14,21 @@ interface LlmRetentionJobData {
   triggeredAt: string;
 }
 
+interface DiscordReceiptRetentionJobData {
+  triggeredAt: string;
+}
+
 const FEATURE_UPDATE_JOB = "feature.update.reconcile";
 const LLM_RETENTION_JOB = "llm.retention.purge";
+const DISCORD_RECEIPT_RETENTION_JOB = "discord.event_receipts.purge";
+const DISCORD_RECEIPT_PURGE_BATCH_SIZE = 1_000;
+const DISCORD_RECEIPT_PURGE_MAX_BATCHES = 10;
+const DISCORD_RECEIPT_PURGE_INTERVAL_MS = 60 * 60 * 1_000;
 
 export class JobsService {
   private boss: PgBoss | null = null;
   private started = false;
+  private receiptCleanupTimer?: ReturnType<typeof setInterval>;
 
   constructor(
     private readonly config: AppConfig,
@@ -28,7 +37,26 @@ export class JobsService {
   ) {}
 
   async start(): Promise<void> {
-    if (!this.config.pgBossEnabled || !this.config.databaseUrl || this.started) {
+    if (!this.config.databaseUrl || this.started) {
+      return;
+    }
+
+    if (!this.config.pgBossEnabled) {
+      this.started = true;
+      await this.runDiscordReceiptPurge().catch((error) => {
+        this.logger.error({ err: error }, "Discord event receipt purge failed");
+      });
+      this.receiptCleanupTimer = setInterval(() => {
+        void this.runDiscordReceiptPurge()
+          .then((result) => {
+            this.logger.info({ result }, "Discord event receipt purge completed");
+          })
+          .catch((error) => {
+            this.logger.error({ err: error }, "Discord event receipt purge failed");
+          });
+      }, DISCORD_RECEIPT_PURGE_INTERVAL_MS);
+      this.receiptCleanupTimer.unref();
+      this.logger.info("Local maintenance worker started");
       return;
     }
 
@@ -36,6 +64,7 @@ export class JobsService {
     await this.boss.start();
     await this.boss.createQueue(FEATURE_UPDATE_JOB);
     await this.boss.createQueue(LLM_RETENTION_JOB);
+    await this.boss.createQueue(DISCORD_RECEIPT_RETENTION_JOB);
     await this.boss.work<FeatureUpdateJobData>(
       FEATURE_UPDATE_JOB,
       {},
@@ -83,21 +112,59 @@ export class JobsService {
       },
     );
 
+    await this.boss.work<DiscordReceiptRetentionJobData>(
+      DISCORD_RECEIPT_RETENTION_JOB,
+      {},
+      async () => {
+        const result = await this.runDiscordReceiptPurge();
+        this.logger.info({ result }, "Discord event receipt purge completed");
+      },
+    );
+
     await this.boss.schedule(LLM_RETENTION_JOB, "0 4 * * *", {
       triggeredAt: new Date().toISOString(),
     } satisfies LlmRetentionJobData);
+    await this.boss.schedule(DISCORD_RECEIPT_RETENTION_JOB, "17 * * * *", {
+      triggeredAt: new Date().toISOString(),
+    } satisfies DiscordReceiptRetentionJobData);
 
     this.started = true;
     this.logger.info("pg-boss job worker started");
   }
 
   async stop(): Promise<void> {
-    if (!this.boss || !this.started) {
+    if (!this.started) {
       return;
     }
-    await this.boss.stop();
+    if (this.receiptCleanupTimer) {
+      clearInterval(this.receiptCleanupTimer);
+      this.receiptCleanupTimer = undefined;
+    }
+    if (this.boss) {
+      await this.boss.stop();
+      this.boss = null;
+    }
     this.started = false;
-    this.logger.info("pg-boss job worker stopped");
+    this.logger.info("Job worker stopped");
+  }
+
+  private async runDiscordReceiptPurge(): Promise<{
+    deletedReceipts: number;
+    batches: number;
+  }> {
+    const now = new Date();
+    let deletedReceipts = 0;
+    let batches = 0;
+    for (let index = 0; index < DISCORD_RECEIPT_PURGE_MAX_BATCHES; index += 1) {
+      const deleted = await this.repository.purgeExpiredDiscordEventReceipts(
+        now,
+        DISCORD_RECEIPT_PURGE_BATCH_SIZE,
+      );
+      deletedReceipts += deleted;
+      batches += 1;
+      if (deleted < DISCORD_RECEIPT_PURGE_BATCH_SIZE) break;
+    }
+    return { deletedReceipts, batches };
   }
 
   async enqueueFeatureUpdate(input: {

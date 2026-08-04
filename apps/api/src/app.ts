@@ -12,7 +12,6 @@ import { registerGuildRoutes } from "./modules/guilds/guilds.routes";
 import { registerHealthRoutes } from "./modules/health/health.routes";
 import { registerInternalRoutes } from "./modules/internal/internal.routes";
 import { JobsService } from "./modules/jobs/jobs.service";
-import { registerLlmRoutes } from "./modules/llm/llm.routes";
 import { registerPlatformRoutes } from "./modules/platform/platform.routes";
 import { registerMeRoutes } from "./modules/users/me.routes";
 import { registerRateLimit } from "./plugins/rate-limit";
@@ -88,7 +87,6 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
   await app.register(registerAuthRoutes, { prefix: "/api/v1" });
   await app.register(registerMeRoutes, { prefix: "/api/v1" });
   await app.register(registerGuildRoutes, { prefix: "/api/v1" });
-  await app.register(registerLlmRoutes, { prefix: "/api/v1" });
   await app.register(registerPlatformRoutes, { prefix: "/api/v1" });
   await app.register(registerInternalRoutes, { prefix: "/api/v1" });
 

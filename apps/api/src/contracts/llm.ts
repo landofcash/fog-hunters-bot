@@ -1,8 +1,10 @@
 import { z } from "zod";
 
+export const LLM_PROMPT_MAX_LENGTH = 20_000;
+
 export const llmPromptOverrideSchema = z
   .string()
-  .max(32_000)
+  .max(LLM_PROMPT_MAX_LENGTH)
   .refine((value) => value.trim().length > 0, "Prompt cannot be blank.")
   .nullable();
 

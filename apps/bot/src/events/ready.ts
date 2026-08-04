@@ -1,20 +1,27 @@
 import type { Client } from "discord.js";
 import type { Logger } from "pino";
 import type { ApiClient } from "../api/client";
-import type { BotConfig } from "../config";
-import { registerGuildCommands } from "../discord/register-commands";
+import { synchronizeGuildCommands } from "../discord/register-commands";
 
 export async function handleReadyEvent(input: {
   client: Client<true>;
-  config: BotConfig;
   apiClient: ApiClient;
+  botToken: string;
+  discordApplicationId: string;
   logger: Logger;
 }): Promise<void> {
-  const { client, config, apiClient, logger } = input;
+  const { client, apiClient, botToken, discordApplicationId, logger } = input;
   logger.info({ botUserId: client.user.id, botTag: client.user.tag }, "Discord bot connected");
 
   // Bootstrap guild rows for servers where the bot already exists.
   for (const guild of client.guilds.cache.values()) {
+    if (!guild.available) {
+      logger.info(
+        { guildId: guild.id },
+        "Guild is temporarily unavailable during ready; preserving installation presence",
+      );
+      continue;
+    }
     try {
       let owner:
         | {
@@ -37,35 +44,22 @@ export async function handleReadyEvent(input: {
         logger.warn({ err: ownerError, guildId: guild.id }, "Failed to resolve owner during ready bootstrap");
       }
 
-      await apiClient.bootstrapGuild(guild.id, {
+      const result = await apiClient.bootstrapGuild(guild.id, {
         guildName: guild.name,
         owner,
+      });
+      await synchronizeGuildCommands({
+        apiClient,
+        botToken,
+        clientId: discordApplicationId,
+        guildId: guild.id,
+        previousHash: result.installation.lastCommandManifestHash,
+        previousErrorCode: result.installation.lastCommandSyncErrorCode,
+        logger,
       });
     } catch (error) {
       logger.error({ err: error, guildId: guild.id }, "Failed to bootstrap guild during startup");
     }
   }
 
-  if (!config.commandSyncOnStart) {
-    logger.info("Command sync on start disabled");
-    return;
-  }
-
-  const guildIds =
-    config.discordGuildIds.length > 0
-      ? config.discordGuildIds
-      : Array.from(client.guilds.cache.keys());
-
-  for (const guildId of guildIds) {
-    try {
-      await registerGuildCommands({
-        botToken: config.discordBotToken,
-        clientId: config.discordClientId,
-        guildId,
-        logger,
-      });
-    } catch (error) {
-      logger.error({ err: error, guildId }, "Failed to synchronize commands for guild");
-    }
-  }
 }
