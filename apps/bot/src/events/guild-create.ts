@@ -8,9 +8,17 @@ export async function handleGuildCreateEvent(input: {
   apiClient: ApiClient;
   botToken: string;
   discordApplicationId: string;
+  canPerformDiscordSideEffects: () => boolean;
   logger: Logger;
 }): Promise<void> {
-  const { guild, apiClient, botToken, discordApplicationId, logger } = input;
+  const {
+    guild,
+    apiClient,
+    botToken,
+    discordApplicationId,
+    canPerformDiscordSideEffects,
+    logger,
+  } = input;
 
   if (!guild.available) {
     logger.info({ guildId: guild.id }, "Guild is temporarily unavailable; preserving installation presence");
@@ -50,6 +58,7 @@ export async function handleGuildCreateEvent(input: {
     guildId: guild.id,
     previousHash: result.installation.lastCommandManifestHash,
     previousErrorCode: result.installation.lastCommandSyncErrorCode,
+    canPerformDiscordSideEffects,
     logger,
   });
 

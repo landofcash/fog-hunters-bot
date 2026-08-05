@@ -8,9 +8,17 @@ export async function handleReadyEvent(input: {
   apiClient: ApiClient;
   botToken: string;
   discordApplicationId: string;
+  canPerformDiscordSideEffects: () => boolean;
   logger: Logger;
 }): Promise<void> {
-  const { client, apiClient, botToken, discordApplicationId, logger } = input;
+  const {
+    client,
+    apiClient,
+    botToken,
+    discordApplicationId,
+    canPerformDiscordSideEffects,
+    logger,
+  } = input;
   logger.info({ botUserId: client.user.id, botTag: client.user.tag }, "Discord bot connected");
 
   const guilds = [...client.guilds.cache.values()];
@@ -58,6 +66,7 @@ export async function handleReadyEvent(input: {
         guildId: guild.id,
         previousHash: result.installation.lastCommandManifestHash,
         previousErrorCode: result.installation.lastCommandSyncErrorCode,
+        canPerformDiscordSideEffects,
         logger,
       });
     } catch (error) {

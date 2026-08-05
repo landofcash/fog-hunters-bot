@@ -182,6 +182,7 @@ export async function synchronizeGuildCommands(input: {
   guildId: string;
   previousHash?: string | null;
   previousErrorCode?: string | null;
+  canPerformDiscordSideEffects: () => boolean;
   logger: Logger;
 }): Promise<boolean> {
   if (
@@ -191,6 +192,14 @@ export async function synchronizeGuildCommands(input: {
     input.logger.debug(
       { guildId: input.guildId, commandManifestHash },
       "Guild command manifest already current",
+    );
+    return false;
+  }
+
+  if (!input.canPerformDiscordSideEffects()) {
+    input.logger.warn(
+      { guildId: input.guildId },
+      "Guild command synchronization skipped because Discord side effects are fenced",
     );
     return false;
   }

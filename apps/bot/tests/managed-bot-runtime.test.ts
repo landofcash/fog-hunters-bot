@@ -167,6 +167,7 @@ describe("ManagedBotRuntime", () => {
       apiClient: expect.any(Object),
       botToken: "discord-token",
       discordApplicationId: "application-1",
+      canPerformDiscordSideEffects: expect.any(Function),
       logger,
     });
 

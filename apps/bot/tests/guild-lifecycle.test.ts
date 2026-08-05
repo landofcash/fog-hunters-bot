@@ -1,5 +1,6 @@
 import type { Client, Guild } from "discord.js";
 import { describe, expect, it, vi } from "vitest";
+import { synchronizeGuildCommands } from "../src/discord/register-commands";
 import { handleGuildCreateEvent } from "../src/events/guild-create";
 import { handleGuildDeleteEvent } from "../src/events/guild-delete";
 import { handleReadyEvent } from "../src/events/ready";
@@ -22,6 +23,7 @@ describe("Discord guild lifecycle", () => {
       apiClient,
       botToken: "not-used",
       discordApplicationId: "application-1",
+      canPerformDiscordSideEffects: () => true,
       logger: createLoggerMock(),
     });
 
@@ -36,6 +38,7 @@ describe("Discord guild lifecycle", () => {
       apiClient,
       botToken: "not-used",
       discordApplicationId: "application-1",
+      canPerformDiscordSideEffects: () => true,
       logger: createLoggerMock(),
     });
 
@@ -75,6 +78,7 @@ describe("Discord guild lifecycle", () => {
       apiClient,
       botToken: "bot-token",
       discordApplicationId: "application-1",
+      canPerformDiscordSideEffects: () => false,
       logger: createLoggerMock(),
     });
 
@@ -86,6 +90,29 @@ describe("Discord guild lifecycle", () => {
     expect(apiClient.bootstrapGuild).toHaveBeenCalledWith(
       "available-guild",
       { guildName: "Guild", owner: undefined },
+    );
+  });
+
+  it("does not dispatch command synchronization while Discord side effects are fenced", async () => {
+    const reportCommandManifest = vi.fn();
+    const logger = createLoggerMock();
+
+    const synchronized = await synchronizeGuildCommands({
+      apiClient: createApiClientMock({ reportCommandManifest }),
+      botToken: "bot-token",
+      clientId: "application-1",
+      guildId: "guild-1",
+      previousHash: null,
+      previousErrorCode: null,
+      canPerformDiscordSideEffects: () => false,
+      logger,
+    });
+
+    expect(synchronized).toBe(false);
+    expect(reportCommandManifest).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      { guildId: "guild-1" },
+      "Guild command synchronization skipped because Discord side effects are fenced",
     );
   });
 

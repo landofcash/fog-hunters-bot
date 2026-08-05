@@ -223,6 +223,7 @@ export class ManagedBotRuntime {
         apiClient: this.apiClient,
         botToken: this.claim.discordToken,
         discordApplicationId: this.claim.bot.discordApplicationId,
+        canPerformDiscordSideEffects: () => this.canPerformDiscordSideEffects(),
         logger: this.logger,
       }).catch((error) => {
         this.logger.error({ err: error, guildId: guild.id }, "Guild bootstrap failed");
@@ -341,6 +342,7 @@ export class ManagedBotRuntime {
         apiClient: this.apiClient,
         botToken: this.claim.discordToken,
         discordApplicationId: this.claim.bot.discordApplicationId,
+        canPerformDiscordSideEffects: () => this.canPerformDiscordSideEffects(),
         logger: this.logger,
       });
       if (this.stopping) return;
@@ -529,6 +531,7 @@ export class ManagedBotRuntime {
           guildId: installation.guildDiscordId,
           previousHash: installation.lastCommandManifestHash,
           previousErrorCode: installation.lastCommandSyncErrorCode,
+          canPerformDiscordSideEffects: () => this.canPerformDiscordSideEffects(),
           logger: this.logger,
         });
       } catch (error) {
