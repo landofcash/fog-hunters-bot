@@ -277,6 +277,75 @@ describe("ManagedBotRuntime", () => {
     await runtime.stop({ releaseLease: false, reason: "test complete" });
   });
 
+  it("reconciles the current guild cache before leaving heartbeat quarantine", async () => {
+    let finishRecovery!: () => void;
+    runtimeMocks.handleReadyEvent
+      .mockResolvedValueOnce(undefined)
+      .mockImplementationOnce(() => new Promise<void>((resolve) => {
+        finishRecovery = resolve;
+      }));
+    let readyHeartbeatCount = 0;
+    runtimeMocks.heartbeat.mockImplementation(async (input: { runtimeState: string }) => {
+      if (input.runtimeState === "READY") {
+        readyHeartbeatCount += 1;
+        if (readyHeartbeatCount === 2) {
+          throw new Error("API unavailable");
+        }
+      }
+      return {
+        lease: {
+          botInstanceId: "bot-1",
+          runtimeInstanceId: "runtime-1",
+          leaseGeneration: 3,
+          runtimeState: input.runtimeState,
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          claimedTokenVersion: 1,
+        },
+      };
+    });
+    const client = runtimeMocks.client as unknown as FakeDiscordClient;
+    const logger = createLoggerMock();
+    Object.assign(logger, { child: vi.fn().mockReturnValue(logger) });
+    const runtime = new ManagedBotRuntime(
+      createBotConfig(),
+      createClaim(),
+      logger,
+      vi.fn(),
+    );
+
+    await runtime.start();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(runtime.runtimeState).toBe("QUARANTINED");
+
+    const joinedGuild = {
+      id: "joined-during-quarantine",
+      available: true,
+    } as Guild;
+    client.guilds.cache.set(joinedGuild.id, joinedGuild);
+    client.emit(Events.GuildCreate, joinedGuild);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runtimeMocks.handleGuildCreateEvent).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(runtimeMocks.handleReadyEvent).toHaveBeenCalledTimes(2);
+    expect(runtimeMocks.handleReadyEvent).toHaveBeenLastCalledWith({
+      client,
+      apiClient: expect.any(Object),
+      botToken: "discord-token",
+      discordApplicationId: "application-1",
+      canPerformDiscordSideEffects: expect.any(Function),
+      logger,
+    });
+    expect(client.guilds.cache.get(joinedGuild.id)).toBe(joinedGuild);
+    expect(runtime.runtimeState).toBe("QUARANTINED");
+
+    finishRecovery();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runtime.runtimeState).toBe("READY");
+
+    await runtime.stop({ releaseLease: false, reason: "test complete" });
+  });
+
   it("terminates once and stops heartbeats at the lease safety margin", async () => {
     runtimeMocks.handleReadyEvent.mockResolvedValue(undefined);
     let successfulHeartbeats = 0;

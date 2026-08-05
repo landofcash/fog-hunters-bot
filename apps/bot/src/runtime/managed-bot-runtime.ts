@@ -456,6 +456,17 @@ export class ManagedBotRuntime {
       if (this.stopping) return;
 
       if (this.quarantined) {
+        if (this.ready) {
+          await handleReadyEvent({
+            client: this.client as Client<true>,
+            apiClient: this.apiClient,
+            botToken: this.claim.discordToken,
+            discordApplicationId: this.claim.bot.discordApplicationId,
+            canPerformDiscordSideEffects: () => this.canPerformDiscordSideEffects(),
+            logger: this.logger,
+          });
+          if (this.stopping) return;
+        }
         this.quarantined = false;
         this.acceptingNewWork = true;
         this.logger.info("Bot runtime lease ownership recovered");
