@@ -408,6 +408,7 @@ export function PlatformBotsPage() {
                 <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
                   <Input
                     aria-label="Bot display name"
+                    disabled={updateBot.isPending}
                     value={draft.displayName}
                     onChange={(event) => {
                       const displayName = event.target.value;
@@ -440,6 +441,7 @@ export function PlatformBotsPage() {
                     autoComplete="new-password"
                     aria-label="New Discord bot token"
                     placeholder="Enter a new Discord token"
+                    disabled={configureToken.isPending}
                     value={token}
                     onChange={(event) => setToken(event.target.value)}
                   />

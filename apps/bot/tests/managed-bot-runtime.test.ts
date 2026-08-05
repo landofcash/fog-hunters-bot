@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { Events, type Client } from "discord.js";
+import { Events, type Client, type Guild } from "discord.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotClaimResponse } from "../src/api/contracts";
 import { ManagedBotRuntime } from "../src/runtime/managed-bot-runtime";
@@ -20,6 +20,7 @@ const runtimeMocks = vi.hoisted(() => ({
   failEvent: vi.fn(),
   touchUser: vi.fn(),
   respondWithLlm: vi.fn(),
+  handleGuildCreateEvent: vi.fn(),
   handleReadyEvent: vi.fn(),
   handleInteractionCreateEvent: vi.fn(),
 }));
@@ -44,6 +45,10 @@ vi.mock("../src/discord/client", () => ({
 
 vi.mock("../src/events/ready", () => ({
   handleReadyEvent: runtimeMocks.handleReadyEvent,
+}));
+
+vi.mock("../src/events/guild-create", () => ({
+  handleGuildCreateEvent: runtimeMocks.handleGuildCreateEvent,
 }));
 
 vi.mock("../src/events/interaction-create", () => ({
@@ -118,6 +123,7 @@ describe("ManagedBotRuntime", () => {
     runtimeMocks.failEvent.mockResolvedValue(undefined);
     runtimeMocks.touchUser.mockResolvedValue(undefined);
     runtimeMocks.respondWithLlm.mockResolvedValue({ shouldRespond: false });
+    runtimeMocks.handleGuildCreateEvent.mockResolvedValue(undefined);
     runtimeMocks.handleInteractionCreateEvent.mockResolvedValue(undefined);
     runtimeMocks.heartbeat.mockImplementation(async (input: { runtimeState: string }) => ({
       lease: {
@@ -134,6 +140,37 @@ describe("ManagedBotRuntime", () => {
   afterEach(() => {
     vi.clearAllMocks();
     vi.useRealTimers();
+  });
+
+  it("bootstraps a guild when it becomes available", async () => {
+    runtimeMocks.handleReadyEvent.mockResolvedValue(undefined);
+    const client = runtimeMocks.client as unknown as FakeDiscordClient;
+    const logger = createLoggerMock();
+    Object.assign(logger, { child: vi.fn().mockReturnValue(logger) });
+    const runtime = new ManagedBotRuntime(
+      createBotConfig(),
+      createClaim(),
+      logger,
+      vi.fn(),
+    );
+    await runtime.start();
+    const availableGuild = {
+      id: "available-guild",
+      available: true,
+    } as Guild;
+
+    client.emit(Events.GuildAvailable, availableGuild);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(runtimeMocks.handleGuildCreateEvent).toHaveBeenCalledWith({
+      guild: availableGuild,
+      apiClient: expect.any(Object),
+      botToken: "discord-token",
+      discordApplicationId: "application-1",
+      logger,
+    });
+
+    await runtime.stop({ releaseLease: false, reason: "test complete" });
   });
 
   it("renews the lease while Discord ready reconciliation is still running", async () => {

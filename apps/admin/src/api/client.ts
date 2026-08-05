@@ -155,6 +155,23 @@ const botSettings = (guildId: string, botId: string) =>
     `/api/v1/guilds/${guildId}/bots/${botId}/settings`,
   );
 
+async function platformBots(search = ""): Promise<CursorPage<BotSummary>> {
+  const items: BotSummary[] = [];
+  let cursor: string | undefined;
+
+  do {
+    const page = await request<CursorPage<BotSummary>>(
+      `/api/v1/platform/bots?limit=100`
+        + (search ? `&search=${encodeURIComponent(search)}` : "")
+        + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""),
+    );
+    items.push(...page.items);
+    cursor = page.nextCursor;
+  } while (cursor);
+
+  return { items };
+}
+
 export const api = {
   me: () => request<MeResponse>("/api/v1/me"),
   loginUrl: () => request<{ url: string }>("/api/v1/auth/discord/login?state=dashboard"),
@@ -236,10 +253,7 @@ export const api = {
       `/api/v1/guilds/${guildId}/jobs?limit=100&botInstanceId=${encodeURIComponent(botId)}`,
     ),
 
-  platformBots: (search = "") =>
-    request<CursorPage<BotSummary>>(
-      `/api/v1/platform/bots?limit=100${search ? `&search=${encodeURIComponent(search)}` : ""}`,
-    ),
+  platformBots,
   createBot: (body: {
     slug: string;
     displayName: string;

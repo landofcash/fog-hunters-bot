@@ -1,9 +1,31 @@
-import { describe, expect, it } from "vitest";
-import type { BotInstallationSettingsResponse } from "./types";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  BotInstallationSettingsResponse,
+  BotSummary,
+} from "./types";
 import {
+  api,
   asLlmSettings,
   asLlmSettingsUpdatePayload,
 } from "./client";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+function botSummary(index: number): BotSummary {
+  return {
+    id: `bot-${index}`,
+    slug: `bot-${index}`,
+    displayName: `Bot ${index}`,
+    discordApplicationId: `application-${index}`,
+    desiredStatus: "ACTIVE",
+    tokenVersion: 1,
+    tokenConfigured: true,
+    createdAt: "2026-08-05T00:00:00.000Z",
+    updatedAt: "2026-08-05T00:00:00.000Z",
+  };
+}
 
 function installationSettingsResponse(): BotInstallationSettingsResponse {
   return {
@@ -89,5 +111,38 @@ describe("Admin LLM settings mapping", () => {
       maxInputCharsOverride: null,
       maxOutputTokensOverride: null,
     });
+  });
+});
+
+describe("platform bot directory", () => {
+  it("loads every cursor page", async () => {
+    vi.stubGlobal("document", { cookie: "" });
+    const firstPage = Array.from({ length: 100 }, (_, index) =>
+      botSummary(index + 1));
+    const finalBot = botSummary(101);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        items: firstPage,
+        nextCursor: "cursor+/=",
+      }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        items: [finalBot],
+      }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await api.platformBots();
+
+    expect(result.items).toHaveLength(101);
+    expect(result.items.at(-1)).toEqual(finalBot);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/platform/bots?limit=100",
+      expect.any(Object),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/platform/bots?limit=100&cursor=cursor%2B%2F%3D",
+      expect.any(Object),
+    );
   });
 });

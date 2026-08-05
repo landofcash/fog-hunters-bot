@@ -67,6 +67,9 @@ export function createInternalRateLimiters(app: FastifyInstance): InternalRateLi
     allowList: [],
     keyGenerator: () => `internal-pool:${app.appConfig.botPoolBootstrapKeyHash}`,
   });
+  // Intentional operational trade-off: authenticated lease and work routes share
+  // this configurable per-bot quota. Monitor managed-bot 429s and quarantines;
+  // split control-plane capacity only if observed traffic approaches the limit.
   const botLimit = app.createRateLimit({
     max: app.appConfig.internalBotRateLimitMax,
     timeWindow: RATE_LIMIT_WINDOW,

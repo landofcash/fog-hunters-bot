@@ -1,4 +1,10 @@
-import { Events, type Client, type Interaction, type Message } from "discord.js";
+import {
+  Events,
+  type Client,
+  type Guild,
+  type Interaction,
+  type Message,
+} from "discord.js";
 import type { Logger } from "pino";
 import { ApiClient } from "../api/client";
 import type { BotClaimResponse } from "../api/contracts";
@@ -176,6 +182,9 @@ export class ManagedBotRuntime {
     this.quarantined = true;
     this.client.destroy();
 
+    // Command synchronization is intentionally not drained during shutdown because
+    // Discord rate limits may exceed the shutdown window. Mixed-version rollouts
+    // can require a manual command resync.
     if (options.releaseLease !== false) {
       await this.apiClient.release().catch((error) => {
         this.logger.warn(
@@ -207,7 +216,7 @@ export class ManagedBotRuntime {
       void this.onReady(client);
     });
 
-    this.client.on(Events.GuildCreate, (guild) => {
+    const bootstrapGuild = (guild: Guild) => {
       if (!this.canAcceptNewWork()) return;
       void handleGuildCreateEvent({
         guild,
@@ -218,7 +227,9 @@ export class ManagedBotRuntime {
       }).catch((error) => {
         this.logger.error({ err: error, guildId: guild.id }, "Guild bootstrap failed");
       });
-    });
+    };
+    this.client.on(Events.GuildCreate, bootstrapGuild);
+    this.client.on(Events.GuildAvailable, bootstrapGuild);
 
     this.client.on(Events.GuildDelete, (guild) => {
       if (!this.canAcceptNewWork()) return;
