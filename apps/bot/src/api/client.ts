@@ -196,6 +196,13 @@ export class ApiClient {
     });
   }
 
+  reconcileGuilds(guildIds: string[]): Promise<{ leftCount: number }> {
+    return this.request("/internal/installations/reconcile", {
+      method: "POST",
+      body: JSON.stringify({ guildIds }),
+    });
+  }
+
   async reportIdentity(payload: {
     discordApplicationId: string;
     discordBotUserId: string;

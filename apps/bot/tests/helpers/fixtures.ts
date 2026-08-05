@@ -39,6 +39,7 @@ export function createApiClientMock(overrides: Record<string, unknown> = {}): Ap
   return {
     bootstrapGuild: vi.fn().mockResolvedValue(undefined),
     markGuildLeft: vi.fn().mockResolvedValue(undefined),
+    reconcileGuilds: vi.fn().mockResolvedValue({ leftCount: 0 }),
     touchUser: vi.fn().mockResolvedValue(undefined),
     respondWithLlm: vi.fn().mockResolvedValue({ shouldRespond: false }),
     readGuildSettings: vi.fn(),

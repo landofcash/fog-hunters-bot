@@ -92,7 +92,7 @@ describe("API rate limiting", () => {
     }
   });
 
-  it("uses independent authenticated buckets for bots sharing one IP", async () => {
+  it("does not charge valid bots sharing one IP to the pre-authentication bucket", async () => {
     const app = await createApp();
     const limits = createInternalRateLimiters(app);
     const authenticateBot = async (
@@ -107,6 +107,7 @@ describe("API rate limiting", () => {
       };
     };
     app.get("/api/v1/internal/bot-test", {
+      onRequest: [limits.botAuthenticationAttempt],
       preHandler: [authenticateBot, limits.bot],
     }, async () => ({ ok: true }));
     await app.ready();
@@ -170,9 +171,11 @@ describe("API rate limiting", () => {
     let validationCalls = 0;
     app.get("/api/v1/internal/bot-auth-test", {
       onRequest: [limits.botAuthenticationAttempt],
-      preHandler: [async () => {
+      preHandler: [async (request, reply) => {
         validationCalls += 1;
-        throw new ApiError(401, "BOT_LEASE_REVOKED", "Invalid bot lease.");
+        const error = new ApiError(401, "BOT_LEASE_REVOKED", "Invalid bot lease.");
+        await limits.botAuthenticationFailure(request, reply);
+        throw error;
       }],
     }, async () => ({ ok: true }));
     await app.ready();

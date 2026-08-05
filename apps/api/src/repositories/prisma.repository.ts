@@ -858,6 +858,27 @@ export class PrismaAppRepository implements AppRepository {
     return mapInstallation(row);
   }
 
+  async reconcileInstallationPresence(input: {
+    botInstanceId: string;
+    observedGuildDiscordIds: string[];
+    now: Date;
+  }): Promise<number> {
+    const result = await this.prisma.botInstallation.updateMany({
+      where: {
+        botInstanceId: input.botInstanceId,
+        presenceStatus: "PRESENT",
+        guild: {
+          discordGuildId: { notIn: input.observedGuildDiscordIds },
+        },
+      },
+      data: {
+        presenceStatus: "LEFT",
+        leftAt: input.now,
+      },
+    });
+    return result.count;
+  }
+
   async getInstallation(botInstanceId: string, guildDiscordId: string): Promise<BotInstallationRecord | null> {
     const row = await this.prisma.botInstallation.findFirst({
       where: { botInstanceId, guild: { discordGuildId: guildDiscordId } },
@@ -894,7 +915,10 @@ export class PrismaAppRepository implements AppRepository {
         ],
       },
       include: { guild: true },
-      orderBy: { installedAt: "asc" },
+      orderBy: [
+        { updatedAt: "asc" },
+        { installedAt: "asc" },
+      ],
       take: 25,
     });
     return rows.map(mapInstallation);

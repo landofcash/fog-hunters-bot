@@ -155,7 +155,11 @@ export class ManagedBotRuntime {
     this.acceptingNewWork = false;
     this.clearTimers();
 
-    if (!this.quarantined && Date.now() < this.leaseExpiresAt) {
+    const shouldFlush =
+      options.reason === "POOL_SHUTDOWN"
+      && !this.quarantined
+      && Date.now() < this.leaseExpiresAt;
+    if (shouldFlush) {
       this.flushingBeforeStop = true;
       try {
         await this.messageBuffer.flushAll();
@@ -165,6 +169,7 @@ export class ManagedBotRuntime {
         this.flushingBeforeStop = false;
       }
     } else {
+      this.quarantined = true;
       this.messageBuffer.cancelAll();
     }
 

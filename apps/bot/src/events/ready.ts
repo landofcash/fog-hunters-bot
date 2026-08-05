@@ -13,8 +13,11 @@ export async function handleReadyEvent(input: {
   const { client, apiClient, botToken, discordApplicationId, logger } = input;
   logger.info({ botUserId: client.user.id, botTag: client.user.tag }, "Discord bot connected");
 
+  const guilds = [...client.guilds.cache.values()];
+  await apiClient.reconcileGuilds(guilds.map((guild) => guild.id));
+
   // Bootstrap guild rows for servers where the bot already exists.
-  for (const guild of client.guilds.cache.values()) {
+  for (const guild of guilds) {
     if (!guild.available) {
       logger.info(
         { guildId: guild.id },

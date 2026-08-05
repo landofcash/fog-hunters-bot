@@ -339,6 +339,7 @@ export interface AppRepository {
 
   bootstrapInstallation(input: BootstrapInstallationInput): Promise<BootstrapInstallationResult>;
   markInstallationLeft(input: { botInstanceId: string; guildDiscordId: string }): Promise<BotInstallationRecord | null>;
+  reconcileInstallationPresence(input: { botInstanceId: string; observedGuildDiscordIds: string[]; now: Date }): Promise<number>;
   getInstallation(botInstanceId: string, guildDiscordId: string): Promise<BotInstallationRecord | null>;
   getInstallationById(botInstanceId: string, installationId: string): Promise<BotInstallationRecord | null>;
   listBotInstallations(botInstanceId: string): Promise<BotInstallationRecord[]>;

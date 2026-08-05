@@ -40,6 +40,53 @@ describe("Discord guild lifecycle", () => {
     });
 
     expect(apiClient.bootstrapGuild).not.toHaveBeenCalled();
+    expect(apiClient.reconcileGuilds).toHaveBeenCalledWith(["guild-1"]);
+  });
+
+  it("reconciles available and unavailable guild IDs from the ready snapshot", async () => {
+    const apiClient = createApiClientMock({
+      bootstrapGuild: vi.fn().mockResolvedValue({
+        installation: {
+          lastCommandManifestHash: null,
+          lastCommandSyncErrorCode: null,
+        },
+      }),
+    });
+    const availableGuild = guild({
+      id: "available-guild",
+      fetchOwner: vi.fn().mockRejectedValue(new Error("owner unavailable")),
+    });
+    const unavailableGuild = guild({
+      id: "unavailable-guild",
+      available: false,
+    });
+    const client = {
+      user: { id: "bot-1", tag: "bot#0001" },
+      guilds: {
+        cache: new Map([
+          [availableGuild.id, availableGuild],
+          [unavailableGuild.id, unavailableGuild],
+        ]),
+      },
+    } as unknown as Client<true>;
+
+    await handleReadyEvent({
+      client,
+      apiClient,
+      botToken: "bot-token",
+      discordApplicationId: "application-1",
+      logger: createLoggerMock(),
+    });
+
+    expect(apiClient.reconcileGuilds).toHaveBeenCalledWith([
+      "available-guild",
+      "unavailable-guild",
+    ]);
+    expect(apiClient.bootstrapGuild).toHaveBeenCalledTimes(1);
+    expect(apiClient.bootstrapGuild).toHaveBeenCalledWith(
+      "available-guild",
+      { guildName: "Guild", owner: undefined },
+    );
   });
 
   it("preserves outage deletions and marks authoritative departures left", async () => {

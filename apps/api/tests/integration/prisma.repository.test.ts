@@ -137,6 +137,119 @@ describe("multi-bot repository", () => {
     });
   });
 
+  it("reconciles installation presence from a bot's ready guild snapshot", async () => {
+    const { bot } = await createBot("snapshot-bot", "snapshot-application");
+    const { bot: otherBot } = await createBot("snapshot-other", "snapshot-other-application");
+    for (const guildDiscordId of [
+      "snapshot-available",
+      "snapshot-unavailable",
+      "snapshot-missing",
+      "snapshot-already-left",
+    ]) {
+      await repository.bootstrapInstallation({
+        botInstanceId: bot.id,
+        guildDiscordId,
+        guildName: guildDiscordId,
+      });
+    }
+    await repository.bootstrapInstallation({
+      botInstanceId: otherBot.id,
+      guildDiscordId: "snapshot-other-missing",
+      guildName: "snapshot-other-missing",
+    });
+    const alreadyLeft = await repository.markInstallationLeft({
+      botInstanceId: bot.id,
+      guildDiscordId: "snapshot-already-left",
+    });
+    const reconciledAt = new Date("2026-08-05T12:00:00.000Z");
+
+    await expect(repository.reconcileInstallationPresence({
+      botInstanceId: bot.id,
+      observedGuildDiscordIds: [
+        "snapshot-available",
+        "snapshot-unavailable",
+      ],
+      now: reconciledAt,
+    })).resolves.toBe(1);
+
+    const installations = new Map(
+      (await repository.listBotInstallations(bot.id))
+        .map((installation) => [installation.guildDiscordId, installation]),
+    );
+    expect(installations.get("snapshot-available")?.presenceStatus).toBe("PRESENT");
+    expect(installations.get("snapshot-unavailable")?.presenceStatus).toBe("PRESENT");
+    expect(installations.get("snapshot-missing")).toMatchObject({
+      presenceStatus: "LEFT",
+      leftAt: reconciledAt,
+    });
+    expect(installations.get("snapshot-already-left")).toMatchObject({
+      presenceStatus: "LEFT",
+      leftAt: alreadyLeft?.leftAt,
+    });
+    expect(await repository.getInstallation(
+      otherBot.id,
+      "snapshot-other-missing",
+    )).toMatchObject({ presenceStatus: "PRESENT" });
+
+    await expect(repository.reconcileInstallationPresence({
+      botInstanceId: otherBot.id,
+      observedGuildDiscordIds: [],
+      now: reconciledAt,
+    })).resolves.toBe(1);
+    expect(await repository.getInstallation(
+      otherBot.id,
+      "snapshot-other-missing",
+    )).toMatchObject({
+      presenceStatus: "LEFT",
+      leftAt: reconciledAt,
+    });
+  });
+
+  it("rotates failed command syncs behind later pending installations", async () => {
+    const { bot } = await createBot("command-rotation", "command-rotation-application");
+    const installedAt = new Date("2026-01-01T00:00:00.000Z");
+    const installations = Array.from({ length: 26 }, (_, index) => ({
+      guildId: randomUUID(),
+      installationId: randomUUID(),
+      guildDiscordId: `command-rotation-${index.toString().padStart(2, "0")}`,
+      timestamp: new Date(installedAt.getTime() + index * 1_000),
+    }));
+    await prisma.guild.createMany({
+      data: installations.map((installation) => ({
+        id: installation.guildId,
+        discordGuildId: installation.guildDiscordId,
+        name: installation.guildDiscordId,
+      })),
+    });
+    await prisma.botInstallation.createMany({
+      data: installations.map((installation) => ({
+        id: installation.installationId,
+        botInstanceId: bot.id,
+        guildId: installation.guildId,
+        installedAt: installation.timestamp,
+        lastSeenAt: installation.timestamp,
+        createdAt: installation.timestamp,
+        updatedAt: installation.timestamp,
+      })),
+    });
+
+    expect((await repository.listPendingCommandSyncs(bot.id))
+      .map((installation) => installation.guildDiscordId)).toEqual(
+      installations.slice(0, 25).map((installation) => installation.guildDiscordId),
+    );
+
+    await repository.updateCommandManifest({
+      botInstanceId: bot.id,
+      guildDiscordId: installations[0]!.guildDiscordId,
+      errorCode: "COMMAND_SYNC_FAILED",
+    });
+
+    expect((await repository.listPendingCommandSyncs(bot.id))
+      .map((installation) => installation.guildDiscordId)).toEqual(
+      installations.slice(1).map((installation) => installation.guildDiscordId),
+    );
+  });
+
   it("isolates two bot installations, conversations, settings, and flags in one guild", async () => {
     const { bot: botA } = await createBot("alpha", "application-alpha");
     const { bot: botB } = await createBot("beta", "application-beta");
@@ -1276,6 +1389,38 @@ describe("multi-bot API contracts", () => {
         guildName: "API Guild",
         ownerProfile: { discordUserId: "platform-admin", username: "admin" },
       });
+      await repository.bootstrapInstallation({
+        botInstanceId: botId,
+        guildDiscordId: "api-unavailable-guild",
+        guildName: "API Unavailable Guild",
+      });
+      await repository.bootstrapInstallation({
+        botInstanceId: botId,
+        guildDiscordId: "api-missing-guild",
+        guildName: "API Missing Guild",
+      });
+      const reconcileInstallations = await app.inject({
+        method: "POST",
+        url: "/api/v1/internal/installations/reconcile",
+        headers: leaseHeaders,
+        payload: {
+          guildIds: [
+            "foreign-guild",
+            "api-guild",
+            "api-unavailable-guild",
+          ],
+        },
+      });
+      expect(reconcileInstallations.statusCode).toBe(200);
+      expect(reconcileInstallations.json()).toEqual({ leftCount: 1 });
+      expect(await repository.getInstallation(
+        botId,
+        "api-unavailable-guild",
+      )).toMatchObject({ presenceStatus: "PRESENT" });
+      expect(await repository.getInstallation(
+        botId,
+        "api-missing-guild",
+      )).toMatchObject({ presenceStatus: "LEFT" });
       const featureUpdate = await app.inject({
         method: "PATCH",
         url: `/api/v1/guilds/api-guild/bots/${botId}/features/operations-feature`,

@@ -3,7 +3,12 @@ import { Events, type Client } from "discord.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BotClaimResponse } from "../src/api/contracts";
 import { ManagedBotRuntime } from "../src/runtime/managed-bot-runtime";
-import { createBotConfig, createLoggerMock, createMessageMock } from "./helpers/fixtures";
+import {
+  createBotConfig,
+  createInteractionMock,
+  createLoggerMock,
+  createMessageMock,
+} from "./helpers/fixtures";
 
 const runtimeMocks = vi.hoisted(() => ({
   client: undefined as unknown as Client,
@@ -399,6 +404,149 @@ describe("ManagedBotRuntime", () => {
     }));
 
     await runtime.stop({ releaseLease: false, reason: "test complete" });
+  });
+
+  it("cancels buffered message work when an assignment is revoked", async () => {
+    runtimeMocks.handleReadyEvent.mockResolvedValue(undefined);
+    runtimeMocks.respondWithLlm.mockResolvedValue({
+      shouldRespond: true,
+      replyText: "Revoked reply",
+    });
+    const client = runtimeMocks.client as unknown as FakeDiscordClient;
+    const logger = createLoggerMock();
+    Object.assign(logger, { child: vi.fn().mockReturnValue(logger) });
+    const runtime = new ManagedBotRuntime(
+      createBotConfig(),
+      createClaim(),
+      logger,
+      vi.fn(),
+    );
+    const send = vi.fn().mockResolvedValue(undefined);
+
+    const start = runtime.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await start;
+
+    client.emit(Events.MessageCreate, createMessageMock({
+      id: "revoked-message",
+      channel: { send },
+    }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runtimeMocks.acquireEvent).toHaveBeenCalledWith(
+      "revoked-message",
+      "MESSAGE_CREATE",
+    );
+
+    await runtime.stop({
+      releaseLease: false,
+      reason: "TOKEN_VERSION_CHANGED",
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(runtimeMocks.respondWithLlm).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("fences an in-flight interaction reply when an assignment is revoked", async () => {
+    runtimeMocks.handleReadyEvent.mockResolvedValue(undefined);
+    let releaseInteraction!: () => void;
+    const interactionCanFinish = new Promise<void>((resolve) => {
+      releaseInteraction = resolve;
+    });
+    runtimeMocks.handleInteractionCreateEvent.mockImplementation(
+      async (input: { interaction: { reply: (options: { content: string }) => Promise<unknown> } }) => {
+        await interactionCanFinish;
+        await input.interaction.reply({ content: "Late reply" });
+      },
+    );
+    let releaseBufferFlush!: () => void;
+    runtimeMocks.respondWithLlm.mockReturnValue(new Promise((resolve) => {
+      releaseBufferFlush = () => resolve({ shouldRespond: false });
+    }));
+    const client = runtimeMocks.client as unknown as FakeDiscordClient;
+    const logger = createLoggerMock();
+    Object.assign(logger, { child: vi.fn().mockReturnValue(logger) });
+    const runtime = new ManagedBotRuntime(
+      createBotConfig(),
+      createClaim(),
+      logger,
+      vi.fn(),
+    );
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const interaction = createInteractionMock({
+      id: "revoked-interaction",
+      reply,
+    });
+
+    const start = runtime.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await start;
+
+    client.emit(Events.InteractionCreate, interaction);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runtimeMocks.handleInteractionCreateEvent).toHaveBeenCalledTimes(1);
+
+    client.emit(Events.MessageCreate, createMessageMock({
+      id: "pending-message",
+      channelId: "pending-channel",
+    }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    const stop = runtime.stop({
+      releaseLease: false,
+      reason: "ASSIGNMENT_REMOVED",
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    releaseInteraction();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(reply).not.toHaveBeenCalled();
+
+    releaseBufferFlush();
+    await vi.advanceTimersByTimeAsync(0);
+    await stop;
+  });
+
+  it("flushes buffered message work during a graceful pool shutdown", async () => {
+    runtimeMocks.handleReadyEvent.mockResolvedValue(undefined);
+    runtimeMocks.respondWithLlm.mockResolvedValue({
+      shouldRespond: true,
+      replyText: "Graceful reply",
+    });
+    const client = runtimeMocks.client as unknown as FakeDiscordClient;
+    const logger = createLoggerMock();
+    Object.assign(logger, { child: vi.fn().mockReturnValue(logger) });
+    const runtime = new ManagedBotRuntime(
+      createBotConfig(),
+      createClaim(),
+      logger,
+      vi.fn(),
+    );
+    const send = vi.fn().mockResolvedValue(undefined);
+
+    const start = runtime.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await start;
+
+    client.emit(Events.MessageCreate, createMessageMock({
+      id: "shutdown-message",
+      channel: { send },
+    }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runtimeMocks.acquireEvent).toHaveBeenCalledWith(
+      "shutdown-message",
+      "MESSAGE_CREATE",
+    );
+
+    await runtime.stop({
+      releaseLease: false,
+      reason: "POOL_SHUTDOWN",
+    });
+
+    expect(runtimeMocks.respondWithLlm).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "shutdown-message" }),
+    );
+    expect(send).toHaveBeenCalledWith({ content: "Graceful reply" });
   });
 
   it("skips receipt acquisition for ignored message events", async () => {

@@ -40,11 +40,15 @@ type InternalRateLimitHook = (
 export interface InternalRateLimiters {
   authenticationFailure: InternalRateLimitHook;
   botAuthenticationAttempt: InternalRateLimitHook;
+  botAuthenticationFailure: InternalRateLimitHook;
   pool: InternalRateLimitHook;
   bot: InternalRateLimitHook;
 }
 
 export function createInternalRateLimiters(app: FastifyInstance): InternalRateLimiters {
+  // Successful bots share a pool IP, so only exhausted authentication-failure
+  // buckets are fenced before the next database-backed lease validation.
+  const blockedBotAuthenticationIps = new Map<string, number>();
   const authenticationFailureLimit = app.createRateLimit({
     max: app.appConfig.internalAuthFailureRateLimitMax,
     timeWindow: RATE_LIMIT_WINDOW,
@@ -82,6 +86,7 @@ export function createInternalRateLimiters(app: FastifyInstance): InternalRateLi
   const enforce = (
     limiter: ReturnType<FastifyInstance["createRateLimit"]>,
     scope: string,
+    onExhausted?: (request: FastifyRequest, ttlMs: number) => void,
   ): InternalRateLimitHook => async (request: FastifyRequest, reply: FastifyReply) => {
     const result = await limiter(request);
     if (result.isAllowed) return;
@@ -89,17 +94,40 @@ export function createInternalRateLimiters(app: FastifyInstance): InternalRateLi
     reply.header("x-ratelimit-limit", result.max);
     reply.header("x-ratelimit-remaining", result.remaining);
     reply.header("x-ratelimit-reset", result.ttlInSeconds);
+    if (result.remaining === 0) {
+      onExhausted?.(request, result.ttl);
+    }
     if (!result.isExceeded) return;
 
     reply.header("retry-after", result.ttlInSeconds);
     throw rateLimitError(scope, result.ttlInSeconds);
   };
+  const requireBotAuthenticationCapacity: InternalRateLimitHook = async (request, reply) => {
+    const blockedUntil = blockedBotAuthenticationIps.get(request.ip);
+    if (!blockedUntil) return;
+
+    const retryAfterSeconds = Math.ceil((blockedUntil - Date.now()) / 1_000);
+    if (retryAfterSeconds <= 0) {
+      blockedBotAuthenticationIps.delete(request.ip);
+      return;
+    }
+
+    reply.header("x-ratelimit-limit", app.appConfig.internalBotAuthAttemptRateLimitMax);
+    reply.header("x-ratelimit-remaining", 0);
+    reply.header("x-ratelimit-reset", retryAfterSeconds);
+    reply.header("retry-after", retryAfterSeconds);
+    throw rateLimitError("managed bot authentication attempts", retryAfterSeconds);
+  };
 
   return {
     authenticationFailure: enforce(authenticationFailureLimit, "internal authentication failures"),
-    botAuthenticationAttempt: enforce(
+    botAuthenticationAttempt: requireBotAuthenticationCapacity,
+    botAuthenticationFailure: enforce(
       botAuthenticationAttemptLimit,
       "managed bot authentication attempts",
+      (request, ttlMs) => {
+        blockedBotAuthenticationIps.set(request.ip, Date.now() + ttlMs);
+      },
     ),
     pool: enforce(poolLimit, "bot pool traffic"),
     bot: enforce(botLimit, "managed bot traffic"),

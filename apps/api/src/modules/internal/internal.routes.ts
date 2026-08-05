@@ -36,6 +36,9 @@ const bootstrapBody = z.object({
     avatarUrl: z.string().nullable().optional(),
   }).optional(),
 }).strict();
+const installationSnapshotBody = z.object({
+  guildIds: z.array(z.string().min(1)),
+}).strict();
 const identityBody = z.object({
   discordApplicationId: z.string().min(1),
   discordBotUserId: z.string().min(1),
@@ -227,11 +230,16 @@ export async function registerInternalRoutes(app: FastifyInstance): Promise<void
   const requireRateLimitedCredential = (
     authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>,
     rateLimit: (request: FastifyRequest, reply: FastifyReply) => Promise<void>,
+    credentialFailureRateLimit?: (
+      request: FastifyRequest,
+      reply: FastifyReply,
+    ) => Promise<void>,
   ) => async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
     try {
       await authenticate(request, reply);
     } catch (error) {
       if (isApiError(error) && error.statusCode === 401) {
+        await credentialFailureRateLimit?.(request, reply);
         await rateLimiters.authenticationFailure(request, reply);
       }
       throw error;
@@ -245,6 +253,7 @@ export async function registerInternalRoutes(app: FastifyInstance): Promise<void
   const requireRateLimitedBotLease = requireRateLimitedCredential(
     requireBotLease,
     rateLimiters.bot,
+    rateLimiters.botAuthenticationFailure,
   );
 
   const poolRoutes = async (pool: FastifyInstance): Promise<void> => {
@@ -343,6 +352,18 @@ export async function registerInternalRoutes(app: FastifyInstance): Promise<void
           botInstanceId: botId,
           leaseGeneration: context.lease.leaseGeneration,
           leaseTokenHash: context.leaseTokenHash,
+          now: new Date(),
+        }),
+      };
+    });
+
+    botApp.post("/installations/reconcile", async (request) => {
+      const context = leaseContext(request);
+      const body = installationSnapshotBody.parse(request.body ?? {});
+      return {
+        leftCount: await botApp.repository.reconcileInstallationPresence({
+          botInstanceId: context.bot.id,
+          observedGuildDiscordIds: [...new Set(body.guildIds)],
           now: new Date(),
         }),
       };

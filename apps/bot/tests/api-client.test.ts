@@ -70,6 +70,25 @@ describe("ApiClient", () => {
     });
   });
 
+  it("reports the ready guild snapshot for installation reconciliation", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ leftCount: 1 }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createLeaseClient();
+
+    await expect(client.reconcileGuilds(["guild-1", "guild-2"])).resolves.toEqual({
+      leftCount: 1,
+    });
+
+    const [url, request] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.test/api/v1/internal/installations/reconcile");
+    expect(request.method).toBe("POST");
+    expect(JSON.parse(String(request.body))).toEqual({
+      guildIds: ["guild-1", "guild-2"],
+    });
+  });
+
   it("normalizes settings mutation responses with installation metadata", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       installation: {
