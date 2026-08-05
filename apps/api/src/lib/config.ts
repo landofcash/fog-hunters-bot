@@ -36,6 +36,7 @@ const envSchema = z.object({
   BOT_HEARTBEAT_MS: z.coerce.number().int().min(1_000).default(15_000),
   BOT_LEASE_TTL_MS: z.coerce.number().int().min(30_000).default(60_000),
   INTERNAL_AUTH_FAILURE_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(120),
+  INTERNAL_BOT_AUTH_ATTEMPT_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(600),
   INTERNAL_POOL_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(300),
   INTERNAL_BOT_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(600),
   LLM_ENABLED: z
@@ -84,6 +85,7 @@ export interface AppConfig {
   botHeartbeatMs: number;
   botLeaseTtlMs: number;
   internalAuthFailureRateLimitMax: number;
+  internalBotAuthAttemptRateLimitMax: number;
   internalPoolRateLimitMax: number;
   internalBotRateLimitMax: number;
   llmEnabled: boolean;
@@ -162,6 +164,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     botHeartbeatMs: parsed.BOT_HEARTBEAT_MS,
     botLeaseTtlMs: parsed.BOT_LEASE_TTL_MS,
     internalAuthFailureRateLimitMax: parsed.INTERNAL_AUTH_FAILURE_RATE_LIMIT_MAX,
+    internalBotAuthAttemptRateLimitMax: parsed.INTERNAL_BOT_AUTH_ATTEMPT_RATE_LIMIT_MAX,
     internalPoolRateLimitMax: parsed.INTERNAL_POOL_RATE_LIMIT_MAX,
     internalBotRateLimitMax: parsed.INTERNAL_BOT_RATE_LIMIT_MAX,
     llmEnabled: parsed.LLM_ENABLED ?? true,

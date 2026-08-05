@@ -127,10 +127,20 @@ export class BotPoolSupervisor {
           assignment.runtime.runtimeInstanceId === this.config.runtimeInstanceId &&
           assignment.runtime.claimRequestId
         ) {
-          this.claimRequestIds.set(
-            assignment.botInstanceId,
-            assignment.runtime.claimRequestId,
-          );
+          const expiresAt = assignment.runtime.expiresAt
+            ? new Date(assignment.runtime.expiresAt).getTime()
+            : 0;
+          if (!assignment.runtime.revokedAt && expiresAt > Date.now()) {
+            this.claimRequestIds.set(
+              assignment.botInstanceId,
+              assignment.runtime.claimRequestId,
+            );
+          } else if (
+            this.claimRequestIds.get(assignment.botInstanceId)
+            === assignment.runtime.claimRequestId
+          ) {
+            this.claimRequestIds.delete(assignment.botInstanceId);
+          }
         }
         await this.claimAndStart(assignment.botInstanceId);
       }),

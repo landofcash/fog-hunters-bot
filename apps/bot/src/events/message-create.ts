@@ -33,7 +33,7 @@ function splitForDiscord(content: string): string[] {
   return parts;
 }
 
-function shouldIgnoreMessage(message: Message): boolean {
+export function shouldIgnoreMessage(message: Message): boolean {
   return message.author.bot || Boolean(message.webhookId) || !message.content.trim();
 }
 

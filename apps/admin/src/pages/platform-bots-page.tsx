@@ -465,56 +465,58 @@ export function PlatformBotsPage() {
 
             <Card>
               <CardHeader><CardTitle>Bot profile</CardTitle></CardHeader>
-              <CardContent className="space-y-5">
-                <div className="grid gap-4 sm:grid-cols-3">
-                  <div className="grid gap-2">
-                    <Label>Default model</Label>
-                    <Input value={draft.profile.defaultModel} onChange={(event) => updateProfileDraft({ defaultModel: event.target.value })} />
+              <CardContent>
+                <fieldset disabled={saveProfile.isPending} className="space-y-5 border-0 p-0">
+                  <div className="grid gap-4 sm:grid-cols-3">
+                    <div className="grid gap-2">
+                      <Label>Default model</Label>
+                      <Input value={draft.profile.defaultModel} onChange={(event) => updateProfileDraft({ defaultModel: event.target.value })} />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label>Retention days</Label>
+                      <Input type="number" value={draft.profile.retentionDays} onChange={(event) => updateProfileDraft({ retentionDays: Number(event.target.value) })} />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label>DM responses</Label>
+                      <div className="flex h-9 items-center"><Switch checked={draft.profile.dmEnabled} onCheckedChange={(dmEnabled) => updateProfileDraft({ dmEnabled })} /></div>
+                    </div>
                   </div>
-                  <div className="grid gap-2">
-                    <Label>Retention days</Label>
-                    <Input type="number" value={draft.profile.retentionDays} onChange={(event) => updateProfileDraft({ retentionDays: Number(event.target.value) })} />
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="grid gap-2">
+                      <Label>Assistant prompt</Label>
+                      <Textarea
+                        maxLength={LLM_PROMPT_MAX_LENGTH}
+                        value={draft.profile.assistantPrompt ?? ""}
+                        onChange={(event) => updateProfileDraft({
+                          assistantPrompt: event.target.value || null,
+                        })}
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label>Gatekeeper prompt</Label>
+                      <Textarea
+                        maxLength={LLM_PROMPT_MAX_LENGTH}
+                        value={draft.profile.gatekeeperPrompt ?? ""}
+                        onChange={(event) => updateProfileDraft({
+                          gatekeeperPrompt: event.target.value || null,
+                        })}
+                      />
+                    </div>
                   </div>
-                  <div className="grid gap-2">
-                    <Label>DM responses</Label>
-                    <div className="flex h-9 items-center"><Switch checked={draft.profile.dmEnabled} onCheckedChange={(dmEnabled) => updateProfileDraft({ dmEnabled })} /></div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="grid gap-2">
+                      <Label>Max input characters</Label>
+                      <Input type="number" value={draft.profile.maxInputChars} onChange={(event) => updateProfileDraft({ maxInputChars: Number(event.target.value) })} />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label>Max output tokens</Label>
+                      <Input type="number" value={draft.profile.maxOutputTokens} onChange={(event) => updateProfileDraft({ maxOutputTokens: Number(event.target.value) })} />
+                    </div>
                   </div>
-                </div>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="grid gap-2">
-                    <Label>Assistant prompt</Label>
-                    <Textarea
-                      maxLength={LLM_PROMPT_MAX_LENGTH}
-                      value={draft.profile.assistantPrompt ?? ""}
-                      onChange={(event) => updateProfileDraft({
-                        assistantPrompt: event.target.value || null,
-                      })}
-                    />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label>Gatekeeper prompt</Label>
-                    <Textarea
-                      maxLength={LLM_PROMPT_MAX_LENGTH}
-                      value={draft.profile.gatekeeperPrompt ?? ""}
-                      onChange={(event) => updateProfileDraft({
-                        gatekeeperPrompt: event.target.value || null,
-                      })}
-                    />
-                  </div>
-                </div>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="grid gap-2">
-                    <Label>Max input characters</Label>
-                    <Input type="number" value={draft.profile.maxInputChars} onChange={(event) => updateProfileDraft({ maxInputChars: Number(event.target.value) })} />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label>Max output tokens</Label>
-                    <Input type="number" value={draft.profile.maxOutputTokens} onChange={(event) => updateProfileDraft({ maxOutputTokens: Number(event.target.value) })} />
-                  </div>
-                </div>
-                <Button onClick={() => saveProfile.mutate()} disabled={!draft.profileDirty || saveProfile.isPending}>
-                  <Save className="size-4" /> Save profile
-                </Button>
+                  <Button onClick={() => saveProfile.mutate()} disabled={!draft.profileDirty || saveProfile.isPending}>
+                    <Save className="size-4" /> Save profile
+                  </Button>
+                </fieldset>
               </CardContent>
             </Card>
 

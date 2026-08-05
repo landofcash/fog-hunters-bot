@@ -400,4 +400,40 @@ describe("ManagedBotRuntime", () => {
 
     await runtime.stop({ releaseLease: false, reason: "test complete" });
   });
+
+  it("skips receipt acquisition for ignored message events", async () => {
+    runtimeMocks.handleReadyEvent.mockResolvedValue(undefined);
+    const client = runtimeMocks.client as unknown as FakeDiscordClient;
+    const logger = createLoggerMock();
+    Object.assign(logger, { child: vi.fn().mockReturnValue(logger) });
+    const runtime = new ManagedBotRuntime(
+      createBotConfig(),
+      createClaim(),
+      logger,
+      vi.fn(),
+    );
+
+    const start = runtime.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await start;
+
+    client.emit(Events.MessageCreate, createMessageMock({
+      id: "bot-message",
+      author: { bot: true },
+    }));
+    client.emit(Events.MessageCreate, createMessageMock({
+      id: "webhook-message",
+      webhookId: "webhook-1",
+    }));
+    client.emit(Events.MessageCreate, createMessageMock({
+      id: "empty-message",
+      content: "   ",
+    }));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(runtimeMocks.acquireEvent).not.toHaveBeenCalled();
+    expect(runtimeMocks.completeEvent).not.toHaveBeenCalled();
+
+    await runtime.stop({ releaseLease: false, reason: "test complete" });
+  });
 });

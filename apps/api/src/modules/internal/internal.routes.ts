@@ -311,6 +311,7 @@ export async function registerInternalRoutes(app: FastifyInstance): Promise<void
   await app.register(poolRoutes, { prefix: "/internal/runtime" });
 
   const botRoutes = async (botApp: FastifyInstance): Promise<void> => {
+    botApp.addHook("onRequest", rateLimiters.botAuthenticationAttempt);
     botApp.addHook("preHandler", requireRateLimitedBotLease);
 
     botApp.post("/runtime/assignments/:botId/heartbeat", async (request) => {

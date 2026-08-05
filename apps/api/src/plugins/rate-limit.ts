@@ -39,6 +39,7 @@ type InternalRateLimitHook = (
 
 export interface InternalRateLimiters {
   authenticationFailure: InternalRateLimitHook;
+  botAuthenticationAttempt: InternalRateLimitHook;
   pool: InternalRateLimitHook;
   bot: InternalRateLimitHook;
 }
@@ -49,6 +50,12 @@ export function createInternalRateLimiters(app: FastifyInstance): InternalRateLi
     timeWindow: RATE_LIMIT_WINDOW,
     allowList: [],
     keyGenerator: (request) => `internal-auth-failure:${request.ip}`,
+  });
+  const botAuthenticationAttemptLimit = app.createRateLimit({
+    max: app.appConfig.internalBotAuthAttemptRateLimitMax,
+    timeWindow: RATE_LIMIT_WINDOW,
+    allowList: [],
+    keyGenerator: (request) => `internal-bot-auth-attempt:${request.ip}`,
   });
   const poolLimit = app.createRateLimit({
     max: app.appConfig.internalPoolRateLimitMax,
@@ -90,6 +97,10 @@ export function createInternalRateLimiters(app: FastifyInstance): InternalRateLi
 
   return {
     authenticationFailure: enforce(authenticationFailureLimit, "internal authentication failures"),
+    botAuthenticationAttempt: enforce(
+      botAuthenticationAttemptLimit,
+      "managed bot authentication attempts",
+    ),
     pool: enforce(poolLimit, "bot pool traffic"),
     bot: enforce(botLimit, "managed bot traffic"),
   };

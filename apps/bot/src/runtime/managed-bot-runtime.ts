@@ -9,7 +9,10 @@ import { handleGuildCreateEvent } from "../events/guild-create";
 import { handleGuildDeleteEvent } from "../events/guild-delete";
 import { handleGuildUpdateEvent } from "../events/guild-update";
 import { handleInteractionCreateEvent } from "../events/interaction-create";
-import { MessageResponseBuffer } from "../events/message-create";
+import {
+  MessageResponseBuffer,
+  shouldIgnoreMessage,
+} from "../events/message-create";
 import { handleReadyEvent } from "../events/ready";
 import { DiscordWebhookAlertNotifier } from "./alerts";
 import { registerDiscordLifecycleAlerts } from "./discord-lifecycle";
@@ -255,6 +258,7 @@ export class ManagedBotRuntime {
 
     this.client.on(Events.MessageCreate, (message) => {
       if (!this.canAcceptNewWork()) return;
+      if (shouldIgnoreMessage(message)) return;
       this.queueMessageEvent(message);
     });
   }

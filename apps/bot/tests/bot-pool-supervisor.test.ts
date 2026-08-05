@@ -58,7 +58,11 @@ vi.mock("../src/runtime/managed-bot-runtime", () => ({
   },
 }));
 
-function assignment(botInstanceId: string, claimRequestId?: string) {
+function assignment(
+  botInstanceId: string,
+  claimRequestId?: string,
+  leaseState: "active" | "expired" | "revoked" = "active",
+) {
   return {
     botInstanceId,
     slug: botInstanceId,
@@ -70,7 +74,11 @@ function assignment(botInstanceId: string, claimRequestId?: string) {
       runtimeInstanceId: claimRequestId ? "test-runtime" : null,
       claimRequestId: claimRequestId ?? null,
       leaseGeneration: claimRequestId ? 3 : 0,
-      runtimeState: claimRequestId ? "CLAIMED" : "STOPPED",
+      runtimeState: claimRequestId && leaseState !== "revoked" ? "CLAIMED" : "STOPPED",
+      expiresAt: claimRequestId
+        ? new Date(Date.now() + (leaseState === "expired" ? -60_000 : 60_000)).toISOString()
+        : null,
+      revokedAt: leaseState === "revoked" ? new Date().toISOString() : null,
     },
   };
 }
@@ -186,6 +194,52 @@ describe("BotPoolSupervisor", () => {
 
     await supervisor.stop();
     expect(runtimeMocks.stops).toContain("bot-ready");
+  });
+
+  it("uses fresh claim IDs for expired and revoked persisted leases", async () => {
+    const expiredClaimId = "55555555-5555-4555-8555-555555555555";
+    const revokedClaimId = "66666666-6666-4666-8666-666666666666";
+    const fetchMock = vi.fn(async (url: string, _request: RequestInit) => {
+      if (url.endsWith("/internal/runtime/assignments")) {
+        return new Response(
+          JSON.stringify({
+            items: [
+              assignment("bot-expired", expiredClaimId, "expired"),
+              assignment("bot-revoked", revokedClaimId, "revoked"),
+            ],
+            pollAfterMs: 15_000,
+          }),
+          { status: 200 },
+        );
+      }
+      const botId = url.includes("bot-expired") ? "bot-expired" : "bot-revoked";
+      return new Response(JSON.stringify(claim(botId)), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const supervisor = new BotPoolSupervisor(
+      createBotConfig({ assignmentPollMs: 60_000 }),
+      createLoggerMock(),
+    );
+
+    supervisor.start();
+    await vi.waitFor(() =>
+      expect(runtimeMocks.starts).toEqual(
+        expect.arrayContaining(["bot-expired", "bot-revoked"]),
+      ),
+    );
+
+    const claimRequestIds = new Map(
+      fetchMock.mock.calls
+        .filter(([url]) => String(url).includes("/claim"))
+        .map(([url, request]) => [
+          String(url).includes("bot-expired") ? "bot-expired" : "bot-revoked",
+          JSON.parse(String((request as RequestInit).body)).claimRequestId as string,
+        ]),
+    );
+    expect(claimRequestIds.get("bot-expired")).not.toBe(expiredClaimId);
+    expect(claimRequestIds.get("bot-revoked")).not.toBe(revokedClaimId);
+
+    await supervisor.stop();
   });
 
   it("evicts a terminal runtime, reclaims it, and ignores its stale callback", async () => {

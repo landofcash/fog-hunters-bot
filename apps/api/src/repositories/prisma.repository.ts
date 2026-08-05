@@ -1256,6 +1256,13 @@ export class PrismaAppRepository implements AppRepository {
           throw new ApiError(409, "BOT_LEASE_ALREADY_OWNED", "Runtime already owns this bot under another claim request.");
         }
       } else {
+        if (lease.claimRequestId === input.claimRequestId) {
+          throw new ApiError(
+            409,
+            "BOT_LEASE_CONFLICT",
+            "A new claim request is required for a new lease generation.",
+          );
+        }
         generation += 1;
       }
 
@@ -1543,7 +1550,12 @@ export class PrismaAppRepository implements AppRepository {
     const rows = await this.prisma.auditLog.findMany({
       where: {
         guildId: guild.id,
-        botInstanceId: input.botInstanceId,
+        OR: input.botInstanceId
+          ? [
+              { botInstanceId: input.botInstanceId },
+              { botInstanceId: null },
+            ]
+          : undefined,
         actorUserId: input.actorUserId,
         action: input.action,
         createdAt: input.from || input.to ? { gte: input.from, lte: input.to } : undefined,

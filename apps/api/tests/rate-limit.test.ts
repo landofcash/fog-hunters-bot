@@ -5,7 +5,7 @@ import Fastify, {
 } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadConfig } from "../src/lib/config";
-import { isApiError } from "../src/lib/errors";
+import { ApiError, isApiError } from "../src/lib/errors";
 import {
   createInternalRateLimiters,
   registerRateLimit,
@@ -35,6 +35,7 @@ async function createApp(overrides: NodeJS.ProcessEnv = {}): Promise<FastifyInst
   const config = loadConfig({
     NODE_ENV: "test",
     INTERNAL_AUTH_FAILURE_RATE_LIMIT_MAX: "2",
+    INTERNAL_BOT_AUTH_ATTEMPT_RATE_LIMIT_MAX: "2",
     INTERNAL_POOL_RATE_LIMIT_MAX: "2",
     INTERNAL_BOT_RATE_LIMIT_MAX: "2",
     ...overrides,
@@ -161,5 +162,36 @@ describe("API rate limiting", () => {
       remoteAddress: "10.0.0.4",
     });
     expect(limited.statusCode).toBe(429);
+  });
+
+  it("limits bot authentication attempts before database-backed validation", async () => {
+    const app = await createApp();
+    const limits = createInternalRateLimiters(app);
+    let validationCalls = 0;
+    app.get("/api/v1/internal/bot-auth-test", {
+      onRequest: [limits.botAuthenticationAttempt],
+      preHandler: [async () => {
+        validationCalls += 1;
+        throw new ApiError(401, "BOT_LEASE_REVOKED", "Invalid bot lease.");
+      }],
+    }, async () => ({ ok: true }));
+    await app.ready();
+
+    for (let index = 0; index < 2; index += 1) {
+      const response = await app.inject({
+        method: "GET",
+        url: "/api/v1/internal/bot-auth-test",
+        remoteAddress: "10.0.0.5",
+      });
+      expect(response.statusCode).toBe(401);
+    }
+
+    const limited = await app.inject({
+      method: "GET",
+      url: "/api/v1/internal/bot-auth-test",
+      remoteAddress: "10.0.0.5",
+    });
+    expect(limited.statusCode).toBe(429);
+    expect(validationCalls).toBe(2);
   });
 });

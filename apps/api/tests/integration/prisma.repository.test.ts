@@ -370,6 +370,18 @@ describe("multi-bot repository", () => {
       }),
       "BOT_LEASE_CONFLICT",
     );
+    await expectApiCode(
+      repository.claimRuntime({
+        botInstanceId: bot.id,
+        runtimeInstanceId: "runtime-a",
+        claimRequestId: "11111111-1111-4111-8111-111111111111",
+        leaseToken: "lease-two",
+        leaseTokenHash: "hash-two",
+        now: new Date(now.getTime() + 61_000),
+        expiresAt: new Date(now.getTime() + 121_000),
+      }),
+      "BOT_LEASE_CONFLICT",
+    );
 
     const replacement = await repository.claimRuntime({
       botInstanceId: bot.id,
@@ -1618,6 +1630,7 @@ describe("multi-bot API contracts", () => {
       });
       const roleAudit = (await repository.listAuditLogs({
         guildDiscordId: "api-guild",
+        botInstanceId: botId,
         action: "member.role.updated",
         limit: 10,
       })).items[0];
