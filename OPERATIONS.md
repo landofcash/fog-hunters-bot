@@ -136,7 +136,11 @@ This release intentionally copies no rows from the guild-centric database.
 6. Stop the old single-client Discord runtime before activating any token in
    the new pool.
 7. Activate bots and verify each runtime reaches `READY`.
-8. Verify cached Discord guilds recreate guilds and bot installations.
+8. Verify cached Discord guilds recreate guilds and bot installations. Confirm
+   the latest Discord `BOT_ADD` executor receives FHAIBot `ADMIN` access while
+   the Discord guild owner remains `OWNER`. Existing installations must grant
+   the bot **View Audit Log** before this installer-access reconciliation can
+   run.
 9. Run the staging acceptance checks below.
 10. Retain the old database through the rollback window; delete it only after
     explicit validation and approval.

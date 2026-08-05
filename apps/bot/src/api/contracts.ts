@@ -101,6 +101,13 @@ export interface InternalBootstrapRequest {
     globalName?: string | null;
     avatarUrl?: string | null;
   };
+  installer?: {
+    discordUserId: string;
+    username: string;
+    globalName?: string | null;
+    avatarUrl?: string | null;
+  };
+  installerAuditLogEntryId?: string;
 }
 
 export interface InternalUserTouchRequest {

@@ -890,6 +890,99 @@ describe("multi-bot repository", () => {
     );
   });
 
+  it("grants each Discord bot installer one idempotent ADMIN membership", async () => {
+    const { bot } = await createBot("installer-bot", "application-installer");
+    const first = await repository.bootstrapInstallation({
+      botInstanceId: bot.id,
+      guildDiscordId: "installer-guild",
+      guildName: "Installer Guild",
+      ownerProfile: { discordUserId: "installer-owner", username: "owner" },
+      installerProfile: { discordUserId: "installer-admin", username: "installer" },
+      installerAuditLogEntryId: "discord-audit-entry-1",
+    });
+
+    expect(first).toMatchObject({
+      ownerMembershipCreated: true,
+      installerMembershipCreated: true,
+      installerAdminGranted: true,
+      installerDiscordUserId: "installer-admin",
+    });
+    expect(await repository.getMembershipByDiscordUser(
+      "installer-guild",
+      "installer-owner",
+    )).toMatchObject({
+      tenantRole: "OWNER",
+      status: "ACTIVE",
+    });
+    const installerMembership = await repository.getMembershipByDiscordUser(
+      "installer-guild",
+      "installer-admin",
+    );
+    expect(installerMembership).toMatchObject({
+      tenantRole: "ADMIN",
+      status: "ACTIVE",
+    });
+
+    await repository.updateGuildMemberRole({
+      guildDiscordId: "installer-guild",
+      targetUserId: installerMembership!.userId,
+      role: "USER",
+    });
+    const replay = await repository.bootstrapInstallation({
+      botInstanceId: bot.id,
+      guildDiscordId: "installer-guild",
+      guildName: "Installer Guild",
+      ownerProfile: { discordUserId: "installer-owner", username: "owner" },
+      installerProfile: { discordUserId: "installer-admin", username: "installer" },
+      installerAuditLogEntryId: "discord-audit-entry-1",
+    });
+    expect(replay).toMatchObject({
+      installerMembershipCreated: false,
+      installerAdminGranted: false,
+    });
+    expect(await repository.getMembershipByDiscordUser(
+      "installer-guild",
+      "installer-admin",
+    )).toMatchObject({
+      tenantRole: "USER",
+      status: "ACTIVE",
+    });
+
+    const reinstall = await repository.bootstrapInstallation({
+      botInstanceId: bot.id,
+      guildDiscordId: "installer-guild",
+      guildName: "Installer Guild",
+      ownerProfile: { discordUserId: "installer-owner", username: "owner" },
+      installerProfile: { discordUserId: "installer-admin", username: "installer" },
+      installerAuditLogEntryId: "discord-audit-entry-2",
+    });
+    expect(reinstall.installerAdminGranted).toBe(true);
+    expect(await repository.getMembershipByDiscordUser(
+      "installer-guild",
+      "installer-admin",
+    )).toMatchObject({
+      tenantRole: "ADMIN",
+      status: "ACTIVE",
+    });
+
+    const ownerInstalled = await repository.bootstrapInstallation({
+      botInstanceId: bot.id,
+      guildDiscordId: "owner-installed-guild",
+      guildName: "Owner Installed Guild",
+      ownerProfile: { discordUserId: "same-user", username: "same" },
+      installerProfile: { discordUserId: "same-user", username: "same" },
+      installerAuditLogEntryId: "discord-audit-entry-owner",
+    });
+    expect(ownerInstalled.installerAdminGranted).toBe(false);
+    expect(await repository.getMembershipByDiscordUser(
+      "owner-installed-guild",
+      "same-user",
+    )).toMatchObject({
+      tenantRole: "OWNER",
+      status: "ACTIVE",
+    });
+  });
+
   it("maps concurrent owner demotions to last-owner protection", async () => {
     const { bot } = await createBot("owner-race-bot", "application-owner-race");
     await repository.bootstrapInstallation({
@@ -1264,6 +1357,17 @@ describe("multi-bot API contracts", () => {
         payload: { discordApplicationId: "changed" },
       });
       expect(immutablePatch.statusCode).toBe(400);
+
+      const installUrlResponse = await app.inject({
+        method: "GET",
+        url: `/api/v1/platform/bots/${botId}/install-url`,
+        headers: browserHeaders,
+      });
+      expect(installUrlResponse.statusCode).toBe(200);
+      const installUrl = new URL(installUrlResponse.json().url);
+      expect(installUrl.searchParams.get("client_id")).toBe("987654321");
+      expect(installUrl.searchParams.get("scope")).toBe("bot applications.commands");
+      expect(installUrl.searchParams.get("permissions")).toBe("68736");
 
       const discordToken = "discord-token-never-returned-from-admin-routes";
       const tokenResponse = await app.inject({

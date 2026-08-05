@@ -24,6 +24,11 @@ const createBotBody = z.object({
   displayName: z.string().min(1).max(100),
   discordApplicationId: z.string().min(1).max(32),
 }).strict();
+const EXISTING_DISCORD_INSTALL_PERMISSIONS = 68_608;
+const VIEW_AUDIT_LOG_PERMISSION = 128;
+const DISCORD_INSTALL_PERMISSIONS = String(
+  EXISTING_DISCORD_INSTALL_PERMISSIONS + VIEW_AUDIT_LOG_PERMISSION,
+);
 const patchBotBody = z.object({
   displayName: z.string().min(1).max(100).optional(),
   desiredStatus: z.enum(["DRAFT", "ACTIVE", "DISABLED"]).optional(),
@@ -303,7 +308,7 @@ export async function registerPlatformRoutes(app: FastifyInstance): Promise<void
       if (!bot) throw new ApiError(404, "BOT_NOT_FOUND", "Bot not found.");
       const query = new URLSearchParams({
         client_id: bot.discordApplicationId,
-        permissions: "68608",
+        permissions: DISCORD_INSTALL_PERMISSIONS,
         scope: "bot applications.commands",
       });
       return { url: `https://discord.com/oauth2/authorize?${query.toString()}` };

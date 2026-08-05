@@ -10,6 +10,8 @@ import type {
   BotProfileRecord,
   BotRuntimeLeaseRecord,
   BotTokenSecretRecord,
+  BootstrapInstallationInput,
+  BootstrapInstallationResult,
   CommandAccessResult,
   CommandPermissionRecord,
   CursorPage,
@@ -698,12 +700,9 @@ export class PrismaAppRepository implements AppRepository {
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
-  async bootstrapInstallation(input: {
-    botInstanceId: string;
-    guildDiscordId: string;
-    guildName: string;
-    ownerProfile?: { discordUserId: string; username: string; globalName?: string | null; avatarUrl?: string | null };
-  }): Promise<any> {
+  async bootstrapInstallation(
+    input: BootstrapInstallationInput,
+  ): Promise<BootstrapInstallationResult> {
     for (let attempt = 0; ; attempt += 1) {
       try {
         return await this.prisma.$transaction(async (tx) => {
@@ -823,6 +822,82 @@ export class PrismaAppRepository implements AppRepository {
         }
       }
 
+      let installerMembershipCreated = false;
+      let installerAdminGranted = false;
+      if (input.installerProfile && input.installerAuditLogEntryId) {
+        const installer = await tx.user.upsert({
+          where: { discordUserId: input.installerProfile.discordUserId },
+          create: { id: generateId(), ...input.installerProfile },
+          update: {
+            username: input.installerProfile.username,
+            globalName: input.installerProfile.globalName,
+            avatarUrl: input.installerProfile.avatarUrl,
+          },
+        });
+        const existingGrant = await tx.auditLog.findFirst({
+          where: {
+            botInstanceId: input.botInstanceId,
+            botInstallationId: installation.id,
+            action: "guild.installer.access_granted",
+            entityId: input.installerAuditLogEntryId,
+          },
+          select: { id: true },
+        });
+
+        if (!existingGrant) {
+          const previousMembership = await tx.guildMember.findUnique({
+            where: { guildId_userId: { guildId: guild.id, userId: installer.id } },
+          });
+          const installerRole = previousMembership?.tenantRole === "OWNER"
+            ? "OWNER"
+            : "ADMIN";
+          await tx.guildMember.upsert({
+            where: { guildId_userId: { guildId: guild.id, userId: installer.id } },
+            create: {
+              guildId: guild.id,
+              userId: installer.id,
+              tenantRole: installerRole,
+              status: "ACTIVE",
+              joinedAt: new Date(),
+            },
+            update: {
+              tenantRole: installerRole,
+              status: "ACTIVE",
+              lastSeenAt: new Date(),
+            },
+          });
+          installerMembershipCreated = !previousMembership;
+          installerAdminGranted = installerRole === "ADMIN";
+          await tx.auditLog.create({
+            data: {
+              id: generateId(),
+              guildId: guild.id,
+              botInstanceId: input.botInstanceId,
+              botInstallationId: installation.id,
+              actorUserId: installer.id,
+              actorType: "USER",
+              action: "guild.installer.access_granted",
+              entityType: "discord_audit_log_entry",
+              entityId: input.installerAuditLogEntryId,
+              beforeJson: previousMembership
+                ? {
+                    tenantRole: previousMembership.tenantRole,
+                    status: previousMembership.status,
+                  }
+                : Prisma.JsonNull,
+              afterJson: {
+                discordUserId: input.installerProfile.discordUserId,
+                tenantRole: installerRole,
+                status: "ACTIVE",
+              },
+              metadataJson: {
+                source: "DISCORD_BOT_ADD",
+              },
+            },
+          });
+        }
+      }
+
       return {
         guild: mapGuild(guild),
         installation: mapInstallation(installation),
@@ -836,6 +911,9 @@ export class PrismaAppRepository implements AppRepository {
         ),
         previousOwnerDiscordUserId: existingGuild?.ownerDiscordUserId ?? null,
         ownerDiscordUserId: input.ownerProfile?.discordUserId ?? existingGuild?.ownerDiscordUserId ?? null,
+        installerMembershipCreated,
+        installerAdminGranted,
+        installerDiscordUserId: input.installerProfile?.discordUserId ?? null,
       };
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
       } catch (error) {

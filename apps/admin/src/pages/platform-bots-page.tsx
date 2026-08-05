@@ -395,13 +395,18 @@ export function PlatformBotsPage() {
                   </Button>
                   {installUrl.data?.url ? (
                     <Button asChild variant="outline">
-                      <a href={installUrl.data.url} target="_blank" rel="noreferrer">
+                      <a
+                        href={installUrl.data.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        title="The installing Discord user becomes an FHAIBot administrator"
+                      >
                         Install in Discord <ExternalLink className="size-4" />
                       </a>
                     </Button>
                   ) : null}
                   <span className="text-xs text-slate-500">
-                    Desired state and observed runtime state are intentionally separate.
+                    The Discord user who installs the bot receives FHAIBot ADMIN access.
                   </span>
                 </div>
                 <Separator />

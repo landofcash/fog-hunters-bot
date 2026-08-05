@@ -1,4 +1,4 @@
-import type { Client, Guild } from "discord.js";
+import { Collection, PermissionsBitField, type Client, type Guild } from "discord.js";
 import { describe, expect, it, vi } from "vitest";
 import { synchronizeGuildCommands } from "../src/discord/register-commands";
 import { handleGuildCreateEvent } from "../src/events/guild-create";
@@ -23,6 +23,7 @@ describe("Discord guild lifecycle", () => {
       apiClient,
       botToken: "not-used",
       discordApplicationId: "application-1",
+      discordBotUserId: "bot-1",
       canPerformDiscordSideEffects: () => true,
       logger: createLoggerMock(),
     });
@@ -44,6 +45,77 @@ describe("Discord guild lifecycle", () => {
 
     expect(apiClient.bootstrapGuild).not.toHaveBeenCalled();
     expect(apiClient.reconcileGuilds).toHaveBeenCalledWith(["guild-1"]);
+  });
+
+  it("bootstraps the Discord installer as an administrator", async () => {
+    const apiClient = createApiClientMock({
+      bootstrapGuild: vi.fn().mockResolvedValue({
+        installation: {
+          lastCommandManifestHash: null,
+          lastCommandSyncErrorCode: null,
+        },
+      }),
+    });
+    const installer = {
+      id: "installer-1",
+      username: "installer",
+      globalName: "Installer",
+      bot: false,
+      displayAvatarURL: vi.fn().mockReturnValue("https://avatar.test/installer.png"),
+    };
+
+    await handleGuildCreateEvent({
+      guild: guild({
+        fetchOwner: vi.fn().mockResolvedValue({
+          user: {
+            id: "owner-1",
+            username: "owner",
+            globalName: "Owner",
+            displayAvatarURL: vi.fn().mockReturnValue("https://avatar.test/owner.png"),
+          },
+        }),
+        members: {
+          me: {
+            permissions: new PermissionsBitField(PermissionsBitField.Flags.ViewAuditLog),
+          },
+        },
+        fetchAuditLogs: vi.fn().mockResolvedValue({
+          entries: new Collection([
+            [
+              "audit-entry-1",
+              {
+                id: "audit-entry-1",
+                targetId: "bot-1",
+                executor: installer,
+              },
+            ],
+          ]),
+        }),
+      }),
+      apiClient,
+      botToken: "not-used",
+      discordApplicationId: "application-1",
+      discordBotUserId: "bot-1",
+      canPerformDiscordSideEffects: () => false,
+      logger: createLoggerMock(),
+    });
+
+    expect(apiClient.bootstrapGuild).toHaveBeenCalledWith("guild-1", {
+      guildName: "Guild",
+      owner: {
+        discordUserId: "owner-1",
+        username: "owner",
+        globalName: "Owner",
+        avatarUrl: "https://avatar.test/owner.png",
+      },
+      installer: {
+        discordUserId: "installer-1",
+        username: "installer",
+        globalName: "Installer",
+        avatarUrl: "https://avatar.test/installer.png",
+      },
+      installerAuditLogEntryId: "audit-entry-1",
+    });
   });
 
   it("reconciles available and unavailable guild IDs from the ready snapshot", async () => {

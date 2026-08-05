@@ -136,6 +136,8 @@ export interface BootstrapInstallationInput {
   guildDiscordId: string;
   guildName: string;
   ownerProfile?: DiscordProfile;
+  installerProfile?: DiscordProfile;
+  installerAuditLogEntryId?: string;
 }
 export interface BootstrapInstallationResult {
   guild: GuildRecord;
@@ -146,6 +148,9 @@ export interface BootstrapInstallationResult {
   ownerChanged: boolean;
   previousOwnerDiscordUserId: string | null;
   ownerDiscordUserId: string | null;
+  installerMembershipCreated: boolean;
+  installerAdminGranted: boolean;
+  installerDiscordUserId: string | null;
 }
 export interface FeatureFlagRecord {
   id: string;

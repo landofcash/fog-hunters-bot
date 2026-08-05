@@ -120,7 +120,10 @@ created through the platform Admin UI; they are not environment variables.
    token field.
 5. Activate the bot explicitly.
 6. Start the pooled runtime with `npm run dev:bot`.
-7. Use the generated install URL to add the bot to a guild.
+7. Use the generated install URL to add the bot to a guild. The bot requests
+   **View Audit Log** so it can identify the Discord member who completed the
+   installation and grant that member FHAIBot `ADMIN` access. The Discord guild
+   owner remains FHAIBot `OWNER`.
 
 The API encrypts every Discord token with AES-256-GCM. The pool receives a
 plaintext token only in memory after an authenticated lease claim.

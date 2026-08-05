@@ -35,7 +35,19 @@ const bootstrapBody = z.object({
     globalName: z.string().nullable().optional(),
     avatarUrl: z.string().nullable().optional(),
   }).optional(),
-}).strict();
+  installer: z.object({
+    discordUserId: z.string().min(1),
+    username: z.string().min(1),
+    globalName: z.string().nullable().optional(),
+    avatarUrl: z.string().nullable().optional(),
+  }).optional(),
+  installerAuditLogEntryId: z.string().min(1).optional(),
+}).strict().refine(
+  (body) => Boolean(body.installer) === Boolean(body.installerAuditLogEntryId),
+  {
+    message: "Installer profile and audit log entry ID must be supplied together.",
+  },
+);
 const installationSnapshotBody = z.object({
   guildIds: z.array(z.string().min(1)),
 }).strict();
@@ -378,6 +390,8 @@ export async function registerInternalRoutes(app: FastifyInstance): Promise<void
         guildDiscordId: guildId,
         guildName: body.guildName,
         ownerProfile: body.owner,
+        installerProfile: body.installer,
+        installerAuditLogEntryId: body.installerAuditLogEntryId,
       });
     });
 

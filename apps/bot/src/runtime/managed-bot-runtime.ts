@@ -223,6 +223,7 @@ export class ManagedBotRuntime {
         apiClient: this.apiClient,
         botToken: this.claim.discordToken,
         discordApplicationId: this.claim.bot.discordApplicationId,
+        discordBotUserId: this.client.user?.id ?? this.claim.bot.discordBotUserId ?? "",
         canPerformDiscordSideEffects: () => this.canPerformDiscordSideEffects(),
         logger: this.logger,
       }).catch((error) => {
