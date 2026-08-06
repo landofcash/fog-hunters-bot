@@ -19,9 +19,9 @@ export function GuildDirectoryPage() {
         action={
           me?.platformRole === "PLATFORM_ADMIN" ? (
             <Button asChild variant="outline">
-              <Link to="/platform/guilds">
+              <Link to="/platform/bots">
                 <ShieldCheck className="size-4" />
-                View all guilds
+                Manage bots
               </Link>
             </Button>
           ) : null
@@ -43,7 +43,7 @@ export function GuildDirectoryPage() {
               <h2 className="mt-5 truncate text-lg font-semibold text-white">{guild.guildName}</h2>
               <p className="mt-1 truncate font-mono text-xs text-slate-600">{guild.guildId}</p>
               <Button asChild variant="ghost" className="mt-4 w-full justify-between px-0 hover:bg-transparent">
-                <Link to={`/guilds/${guild.guildId}/overview`}>
+                <Link to={`/guilds/${guild.guildId}`}>
                   Open control room
                   <ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
                 </Link>

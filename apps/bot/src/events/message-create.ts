@@ -10,6 +10,10 @@ export const MESSAGE_BUFFER_MAX_MESSAGES = 20;
 
 interface PendingMessageBatch {
   messages: Message[];
+  completionWaiters: Array<{
+    resolve: () => void;
+    reject: (error: unknown) => void;
+  }>;
   idleTimer: ReturnType<typeof setTimeout>;
   maxWaitTimer: ReturnType<typeof setTimeout>;
 }
@@ -29,7 +33,7 @@ function splitForDiscord(content: string): string[] {
   return parts;
 }
 
-function shouldIgnoreMessage(message: Message): boolean {
+export function shouldIgnoreMessage(message: Message): boolean {
   return message.author.bot || Boolean(message.webhookId) || !message.content.trim();
 }
 
@@ -38,14 +42,21 @@ function wasBotMentioned(message: Message): boolean {
   return botUserId ? message.mentions.has(botUserId) : false;
 }
 
+function compareDiscordSnowflakes(left: Message, right: Message): number {
+  const leftId = BigInt(left.id);
+  const rightId = BigInt(right.id);
+  return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+}
+
 async function processMessageBatch(input: {
   messages: Message[];
   apiClient: ApiClient;
   logger: Logger;
+  canProcess?: () => boolean;
 }): Promise<void> {
-  const { messages, apiClient, logger } = input;
+  const { messages, apiClient, logger, canProcess = () => true } = input;
   const message = messages.at(-1);
-  if (!message) {
+  if (!message || !canProcess()) {
     return;
   }
 
@@ -75,6 +86,13 @@ async function processMessageBatch(input: {
 
     const chunks = splitForDiscord(response.replyText);
     for (const chunk of chunks) {
+      if (!canProcess()) {
+        logger.warn(
+          { guildId: message.guildId, channelId: message.channelId },
+          "Message reply cancelled because the runtime is quarantined",
+        );
+        return;
+      }
       if ("send" in message.channel && typeof message.channel.send === "function") {
         await message.channel.send({ content: chunk });
       }
@@ -103,6 +121,7 @@ async function processMessageBatch(input: {
       },
       "Failed to process message for LLM response",
     );
+    throw error;
   }
 }
 
@@ -134,6 +153,7 @@ export class MessageResponseBuffer {
       maxWaitMs?: number;
       maxMessages?: number;
     } = {},
+    private readonly canProcess: () => boolean = () => true,
   ) {
     this.idleMs = options.idleMs ?? MESSAGE_BUFFER_IDLE_MS;
     this.maxWaitMs = options.maxWaitMs ?? MESSAGE_BUFFER_MAX_WAIT_MS;
@@ -141,7 +161,18 @@ export class MessageResponseBuffer {
   }
 
   async enqueue(message: Message): Promise<void> {
-    if (shouldIgnoreMessage(message)) {
+    await this.enqueueInternal(message, false);
+  }
+
+  async enqueueAndWait(message: Message): Promise<void> {
+    await this.enqueueInternal(message, true);
+  }
+
+  private async enqueueInternal(
+    message: Message,
+    waitForProcessing: boolean,
+  ): Promise<void> {
+    if (shouldIgnoreMessage(message) || !this.canProcess()) {
       return;
     }
 
@@ -154,40 +185,56 @@ export class MessageResponseBuffer {
           messages: [message],
           apiClient: this.apiClient,
           logger: this.logger,
+          canProcess: this.canProcess,
         }),
       ]);
       return;
     }
 
-    const key = `${message.guildId}:${message.channelId}`;
+    const key = `${this.apiClient.botInstanceId}:${message.guildId}:${message.channelId}`;
     let batch = this.batches.get(key);
     if (!batch) {
       batch = {
         messages: [],
+        completionWaiters: [],
         idleTimer: setTimeout(() => {
-          void this.flush(key);
+          void this.flush(key).catch(() => undefined);
         }, this.idleMs),
         maxWaitTimer: setTimeout(() => {
-          void this.flush(key);
+          void this.flush(key).catch(() => undefined);
         }, this.maxWaitMs),
       };
       this.batches.set(key, batch);
     }
 
     batch.messages.push(message);
+    const completion = waitForProcessing
+      ? new Promise<void>((resolve, reject) =>
+          batch?.completionWaiters.push({ resolve, reject }),
+        )
+      : Promise.resolve();
     clearTimeout(batch.idleTimer);
     batch.idleTimer = setTimeout(() => {
-      void this.flush(key);
+      void this.flush(key).catch(() => undefined);
     }, this.idleMs);
 
     const shouldFlushImmediately =
       wasBotMentioned(message) || batch.messages.length >= this.maxMessages;
     const flushPromise = shouldFlushImmediately ? this.flush(key) : Promise.resolve();
-    await Promise.all([touchPromise, flushPromise]);
+    await Promise.all([touchPromise, flushPromise, completion]);
   }
 
   async flushAll(): Promise<void> {
     await Promise.all(Array.from(this.batches.keys(), (key) => this.flush(key)));
+  }
+
+  cancelAll(): void {
+    for (const batch of this.batches.values()) {
+      clearTimeout(batch.idleTimer);
+      clearTimeout(batch.maxWaitTimer);
+      for (const waiter of batch.completionWaiters) waiter.resolve();
+    }
+    this.batches.clear();
   }
 
   private async flush(key: string): Promise<void> {
@@ -199,10 +246,17 @@ export class MessageResponseBuffer {
     this.batches.delete(key);
     clearTimeout(batch.idleTimer);
     clearTimeout(batch.maxWaitTimer);
-    await processMessageBatch({
-      messages: batch.messages,
-      apiClient: this.apiClient,
-      logger: this.logger,
-    });
+    try {
+      await processMessageBatch({
+        messages: [...batch.messages].sort(compareDiscordSnowflakes),
+        apiClient: this.apiClient,
+        logger: this.logger,
+        canProcess: this.canProcess,
+      });
+      for (const waiter of batch.completionWaiters) waiter.resolve();
+    } catch (error) {
+      for (const waiter of batch.completionWaiters) waiter.reject(error);
+      throw error;
+    }
   }
 }

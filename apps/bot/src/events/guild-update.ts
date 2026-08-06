@@ -10,6 +10,14 @@ export async function handleGuildUpdateEvent(input: {
 }): Promise<void> {
   const { oldGuild, newGuild, apiClient, logger } = input;
   if (oldGuild.ownerId === newGuild.ownerId) {
+    try {
+      await apiClient.bootstrapGuild(newGuild.id, { guildName: newGuild.name });
+    } catch (error) {
+      logger.error(
+        { err: error, guildId: newGuild.id },
+        "Failed to reconcile guild metadata",
+      );
+    }
     return;
   }
 

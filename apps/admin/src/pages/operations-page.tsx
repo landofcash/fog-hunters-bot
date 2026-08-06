@@ -18,15 +18,15 @@ const statusIcon: Record<JobStatus, typeof Activity> = {
 };
 
 export function OperationsPage() {
-  const { guildId = "" } = useParams();
+  const { guildId = "", botId = "" } = useParams();
   const health = useQuery({
     queryKey: ["health"],
     queryFn: api.health,
     refetchInterval: 30_000,
   });
   const jobs = useQuery({
-    queryKey: ["guild", guildId, "jobs"],
-    queryFn: () => api.jobs(guildId),
+    queryKey: ["guild", guildId, "bot", botId, "jobs"],
+    queryFn: () => api.jobs(guildId, botId),
   });
 
   return (

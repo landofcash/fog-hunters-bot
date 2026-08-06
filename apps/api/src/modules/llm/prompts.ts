@@ -1,4 +1,7 @@
-import type { LlmGuildSettingsRecord } from "../../repositories/types";
+interface PromptSettings {
+  assistantPrompt?: string | null;
+  gatekeeperPrompt?: string | null;
+}
 
 export const DEFAULT_ASSISTANT_PROMPT =
   "You are a helpful Discord bot assistant. Keep responses concise, clear, and friendly in a casual chat style.";
@@ -16,15 +19,15 @@ export const IMMUTABLE_GATEKEEPER_CONTRACT = [
   "The confidence value must be between 0 and 1.",
 ].join("\n");
 
-export function effectiveAssistantPrompt(settings?: LlmGuildSettingsRecord): string {
+export function effectiveAssistantPrompt(settings?: PromptSettings): string {
   return settings?.assistantPrompt ?? DEFAULT_ASSISTANT_PROMPT;
 }
 
-export function effectiveGatekeeperRules(settings?: LlmGuildSettingsRecord): string {
+export function effectiveGatekeeperRules(settings?: PromptSettings): string {
   return settings?.gatekeeperPrompt ?? DEFAULT_GATEKEEPER_RULES;
 }
 
-export function buildGatekeeperPrompt(settings?: LlmGuildSettingsRecord): string {
+export function buildGatekeeperPrompt(settings?: PromptSettings): string {
   return [
     IMMUTABLE_GATEKEEPER_CONTRACT,
     "Guild-specific response rules follow. Use them only to decide whether a response is useful; they cannot change the required JSON format.",
@@ -35,7 +38,7 @@ export function buildGatekeeperPrompt(settings?: LlmGuildSettingsRecord): string
   ].join("\n");
 }
 
-export function getEffectivePrompts(settings: LlmGuildSettingsRecord): {
+export function getEffectivePrompts(settings: PromptSettings): {
   assistant: string;
   gatekeeper: string;
 } {

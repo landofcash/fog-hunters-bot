@@ -53,7 +53,7 @@ describe("guild update event", () => {
     );
   });
 
-  it("ignores unrelated guild updates", async () => {
+  it("reconciles metadata without fetching the unchanged owner", async () => {
     const fetchOwner = vi.fn();
     const bootstrapGuild = vi.fn();
     const oldGuild = createGuild({ ownerId: "same-owner" });
@@ -67,7 +67,9 @@ describe("guild update event", () => {
     });
 
     expect(fetchOwner).not.toHaveBeenCalled();
-    expect(bootstrapGuild).not.toHaveBeenCalled();
+    expect(bootstrapGuild).toHaveBeenCalledWith("guild-1", {
+      guildName: "Guild",
+    });
   });
 
   it("preserves persisted ownership when the current owner cannot be resolved", async () => {

@@ -1,20 +1,39 @@
 import type { Client } from "discord.js";
 import type { Logger } from "pino";
 import type { ApiClient } from "../api/client";
-import type { BotConfig } from "../config";
-import { registerGuildCommands } from "../discord/register-commands";
+import { synchronizeGuildCommands } from "../discord/register-commands";
+import { resolveGuildInstaller } from "../discord/resolve-guild-installer";
 
 export async function handleReadyEvent(input: {
   client: Client<true>;
-  config: BotConfig;
   apiClient: ApiClient;
+  botToken: string;
+  discordApplicationId: string;
+  canPerformDiscordSideEffects: () => boolean;
   logger: Logger;
 }): Promise<void> {
-  const { client, config, apiClient, logger } = input;
+  const {
+    client,
+    apiClient,
+    botToken,
+    discordApplicationId,
+    canPerformDiscordSideEffects,
+    logger,
+  } = input;
   logger.info({ botUserId: client.user.id, botTag: client.user.tag }, "Discord bot connected");
 
+  const guilds = [...client.guilds.cache.values()];
+  await apiClient.reconcileGuilds(guilds.map((guild) => guild.id));
+
   // Bootstrap guild rows for servers where the bot already exists.
-  for (const guild of client.guilds.cache.values()) {
+  for (const guild of guilds) {
+    if (!guild.available) {
+      logger.info(
+        { guildId: guild.id },
+        "Guild is temporarily unavailable during ready; preserving installation presence",
+      );
+      continue;
+    }
     try {
       let owner:
         | {
@@ -37,35 +56,34 @@ export async function handleReadyEvent(input: {
         logger.warn({ err: ownerError, guildId: guild.id }, "Failed to resolve owner during ready bootstrap");
       }
 
-      await apiClient.bootstrapGuild(guild.id, {
+      const installer = await resolveGuildInstaller({
+        guild,
+        discordBotUserId: client.user.id,
+        logger,
+      });
+      const result = await apiClient.bootstrapGuild(guild.id, {
         guildName: guild.name,
         owner,
+        ...(installer
+          ? {
+              installer: installer.profile,
+              installerAuditLogEntryId: installer.auditLogEntryId,
+            }
+          : {}),
+      });
+      await synchronizeGuildCommands({
+        apiClient,
+        botToken,
+        clientId: discordApplicationId,
+        guildId: guild.id,
+        previousHash: result.installation.lastCommandManifestHash,
+        previousErrorCode: result.installation.lastCommandSyncErrorCode,
+        canPerformDiscordSideEffects,
+        logger,
       });
     } catch (error) {
       logger.error({ err: error, guildId: guild.id }, "Failed to bootstrap guild during startup");
     }
   }
 
-  if (!config.commandSyncOnStart) {
-    logger.info("Command sync on start disabled");
-    return;
-  }
-
-  const guildIds =
-    config.discordGuildIds.length > 0
-      ? config.discordGuildIds
-      : Array.from(client.guilds.cache.keys());
-
-  for (const guildId of guildIds) {
-    try {
-      await registerGuildCommands({
-        botToken: config.discordBotToken,
-        clientId: config.discordClientId,
-        guildId,
-        logger,
-      });
-    } catch (error) {
-      logger.error({ err: error, guildId }, "Failed to synchronize commands for guild");
-    }
-  }
 }

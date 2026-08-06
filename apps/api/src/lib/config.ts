@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { createHash } from "node:crypto";
+import { isSupportedLlmModel } from "../modules/llm/models";
 
 const optionalUrl = z.preprocess(
   (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
@@ -28,13 +30,24 @@ const envSchema = z.object({
     .string()
     .optional()
     .transform((v) => v === "true"),
-  INTERNAL_API_KEY: z.string().min(16).default("dev_internal_api_key_change_me"),
+  BOT_POOL_BOOTSTRAP_KEY_HASH: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+  BOT_TOKEN_ACTIVE_KEY_VERSION: z.coerce.number().int().positive().default(1),
+  BOT_ASSIGNMENT_POLL_MS: z.coerce.number().int().min(1_000).default(15_000),
+  BOT_HEARTBEAT_MS: z.coerce.number().int().min(1_000).default(15_000),
+  BOT_LEASE_TTL_MS: z.coerce.number().int().min(30_000).default(60_000),
+  INTERNAL_AUTH_FAILURE_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(120),
+  INTERNAL_BOT_AUTH_ATTEMPT_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(600),
+  INTERNAL_POOL_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(300),
+  INTERNAL_BOT_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(600),
   LLM_ENABLED: z
     .string()
     .optional()
     .transform((v) => v === "true"),
   LLM_PROVIDER: z.enum(["openai"]).default("openai"),
-  LLM_DEFAULT_MODEL: z.string().min(1).default("gpt-4.1-mini"),
+  LLM_DEFAULT_MODEL: z.string()
+    .min(1)
+    .refine(isSupportedLlmModel, "LLM_DEFAULT_MODEL must be a supported model.")
+    .default("gpt-4.1-mini"),
   OPENAI_API_KEY: z.string().optional(),
   LLM_MAX_INPUT_CHARS: z.coerce.number().int().positive().default(4000),
   LLM_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(512),
@@ -65,7 +78,16 @@ export interface AppConfig {
   mockDiscordOauth: boolean;
   platformAdminDiscordIds: Set<string>;
   pgBossEnabled: boolean;
-  internalApiKey: string;
+  botPoolBootstrapKeyHash: string;
+  botTokenActiveKeyVersion: number;
+  botTokenEncryptionKeys: ReadonlyMap<number, Buffer>;
+  botAssignmentPollMs: number;
+  botHeartbeatMs: number;
+  botLeaseTtlMs: number;
+  internalAuthFailureRateLimitMax: number;
+  internalBotAuthAttemptRateLimitMax: number;
+  internalPoolRateLimitMax: number;
+  internalBotRateLimitMax: number;
   llmEnabled: boolean;
   llmProvider: "openai";
   llmDefaultModel: string;
@@ -81,6 +103,38 @@ export interface AppConfig {
 
 export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
   const parsed = envSchema.parse(source);
+  const botTokenEncryptionKeys = new Map<number, Buffer>();
+  for (const [name, value] of Object.entries(source)) {
+    const match = /^BOT_TOKEN_ENCRYPTION_KEY_V(\d+)$/.exec(name);
+    if (!match || !value) {
+      continue;
+    }
+    const version = Number(match[1]);
+    const decoded = Buffer.from(value, "base64");
+    if (decoded.length !== 32) {
+      throw new Error(`${name} must be a Base64-encoded 256-bit key.`);
+    }
+    botTokenEncryptionKeys.set(version, decoded);
+  }
+
+  if (botTokenEncryptionKeys.size === 0 && parsed.NODE_ENV !== "production") {
+    botTokenEncryptionKeys.set(
+      1,
+      createHash("sha256").update("fhaibot-development-token-key").digest(),
+    );
+  }
+  if (!botTokenEncryptionKeys.has(parsed.BOT_TOKEN_ACTIVE_KEY_VERSION)) {
+    throw new Error(
+      `BOT_TOKEN_ENCRYPTION_KEY_V${parsed.BOT_TOKEN_ACTIVE_KEY_VERSION} is required.`,
+    );
+  }
+
+  if (!parsed.BOT_POOL_BOOTSTRAP_KEY_HASH && parsed.NODE_ENV === "production") {
+    throw new Error("BOT_POOL_BOOTSTRAP_KEY_HASH is required in production.");
+  }
+  const botPoolBootstrapKeyHash = parsed.BOT_POOL_BOOTSTRAP_KEY_HASH
+    ?? createHash("sha256").update("dev_bot_pool_bootstrap_key_change_me").digest("hex");
+
   return {
     nodeEnv: parsed.NODE_ENV,
     host: parsed.HOST,
@@ -103,7 +157,16 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
         .filter(Boolean),
     ),
     pgBossEnabled: parsed.PGBOSS_ENABLED ?? false,
-    internalApiKey: parsed.INTERNAL_API_KEY,
+    botPoolBootstrapKeyHash,
+    botTokenActiveKeyVersion: parsed.BOT_TOKEN_ACTIVE_KEY_VERSION,
+    botTokenEncryptionKeys,
+    botAssignmentPollMs: parsed.BOT_ASSIGNMENT_POLL_MS,
+    botHeartbeatMs: parsed.BOT_HEARTBEAT_MS,
+    botLeaseTtlMs: parsed.BOT_LEASE_TTL_MS,
+    internalAuthFailureRateLimitMax: parsed.INTERNAL_AUTH_FAILURE_RATE_LIMIT_MAX,
+    internalBotAuthAttemptRateLimitMax: parsed.INTERNAL_BOT_AUTH_ATTEMPT_RATE_LIMIT_MAX,
+    internalPoolRateLimitMax: parsed.INTERNAL_POOL_RATE_LIMIT_MAX,
+    internalBotRateLimitMax: parsed.INTERNAL_BOT_RATE_LIMIT_MAX,
     llmEnabled: parsed.LLM_ENABLED ?? true,
     llmProvider: parsed.LLM_PROVIDER,
     llmDefaultModel: parsed.LLM_DEFAULT_MODEL,

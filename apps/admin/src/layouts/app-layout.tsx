@@ -12,11 +12,11 @@ import {
   ShieldCheck,
   Users,
 } from "lucide-react";
+import { useEffect } from "react";
 import { NavLink, Outlet, useLocation, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { api } from "@/api/client";
 import { queryClient } from "@/api/query";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -26,25 +26,30 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { guildBotSelectionKey } from "@/lib/bot-context";
 
 const guildNavigation = [
   { path: "overview", label: "Overview", icon: LayoutDashboard },
   { path: "ai", label: "AI settings", icon: BrainCircuit },
   { path: "channels", label: "Channels", icon: Hash },
   { path: "commands", label: "Commands", icon: Command },
-  { path: "administrators", label: "Administrators", icon: Users },
   { path: "audit", label: "Audit log", icon: FileClock },
   { path: "operations", label: "Operations", icon: Activity },
 ];
 
 export function AppLayout() {
-  const { guildId } = useParams();
+  const { guildId, botId } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: api.me });
   const isPlatformAdmin = me?.platformRole === "PLATFORM_ADMIN";
   const membership = me?.memberships.find((item) => item.guildId === guildId);
-  const isPlatformContext = Boolean(guildId && !membership && isPlatformAdmin);
+  const guildBots = useQuery({
+    queryKey: ["guild", guildId, "bots"],
+    queryFn: () => api.guildBots(guildId as string),
+    enabled: Boolean(guildId),
+  });
+  const selectedBot = guildBots.data?.items.find((item) => item.bot.id === botId);
 
   const logout = useMutation({
     mutationFn: api.logout,
@@ -58,6 +63,12 @@ export function AppLayout() {
   const selectedGuildName =
     membership?.guildName ??
     (guildId ? `Guild ${guildId}` : "Select a guild");
+
+  useEffect(() => {
+    if (guildId && botId) {
+      localStorage.setItem(guildBotSelectionKey(guildId), botId);
+    }
+  }, [botId, guildId]);
 
   return (
     <div className="dashboard-grid min-h-screen lg:grid lg:grid-cols-[268px_1fr]">
@@ -73,19 +84,19 @@ export function AppLayout() {
             </div>
           </div>
 
-          <div className="p-4">
+          <div className="space-y-3 p-4">
             <Select
               value={guildId ?? ""}
               onValueChange={(value) => {
                 localStorage.setItem("fhaibot:last-guild", value);
-                navigate(`/guilds/${value}/overview`);
+                navigate(`/guilds/${value}`);
               }}
             >
               <SelectTrigger aria-label="Select guild" className="h-auto min-h-12 bg-white/[0.035] py-2">
                 <div className="min-w-0 text-left">
                   <div className="truncate text-sm font-medium">{selectedGuildName}</div>
                   <div className="mt-0.5 text-[11px] text-slate-500">
-                    {isPlatformContext ? "Platform access" : membership?.tenantRole ?? "Guild"}
+                    {membership?.tenantRole ?? "Guild"}
                   </div>
                 </div>
                 <SelectValue className="sr-only" />
@@ -98,16 +109,46 @@ export function AppLayout() {
                 ))}
               </SelectContent>
             </Select>
+            {guildId ? (
+              <Select
+                value={botId ?? ""}
+                onValueChange={(value) => {
+                  localStorage.setItem(guildBotSelectionKey(guildId), value);
+                  navigate(`/guilds/${guildId}/bots/${value}/overview`);
+                }}
+              >
+                <SelectTrigger aria-label="Select bot" className="h-auto min-h-12 bg-white/[0.035] py-2">
+                  <div className="min-w-0 text-left">
+                    <div className="truncate text-sm font-medium">
+                      {selectedBot?.bot.displayName ?? "Select a bot"}
+                    </div>
+                    <div className="mt-0.5 text-[11px] text-slate-500">
+                      {selectedBot
+                        ? `${selectedBot.installation.presenceStatus} · ${selectedBot.installation.operationalStatus}`
+                        : `${guildBots.data?.items.length ?? 0} installed`}
+                    </div>
+                  </div>
+                  <SelectValue className="sr-only" />
+                </SelectTrigger>
+                <SelectContent className="w-[235px]">
+                  {guildBots.data?.items.map((item) => (
+                    <SelectItem key={item.bot.id} value={item.bot.id}>
+                      {item.bot.displayName}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : null}
           </div>
 
           <nav className="flex gap-1 overflow-x-auto px-3 pb-4 lg:flex-col lg:overflow-visible">
-            {guildId
+            {guildId && botId
               ? guildNavigation.map((item) => {
                   const Icon = item.icon;
                   return (
                     <NavLink
                       key={item.path}
-                      to={`/guilds/${guildId}/${item.path}`}
+                      to={`/guilds/${guildId}/bots/${botId}/${item.path}`}
                       className={({ isActive }) =>
                         cn(
                           "flex shrink-0 items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors",
@@ -123,6 +164,22 @@ export function AppLayout() {
                   );
                 })
               : null}
+            {guildId ? (
+              <NavLink
+                to={`/guilds/${guildId}/administrators`}
+                className={({ isActive }) =>
+                  cn(
+                    "flex shrink-0 items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors",
+                    isActive
+                      ? "bg-emerald-400/11 text-emerald-200"
+                      : "text-slate-400 hover:bg-white/5 hover:text-slate-100",
+                  )
+                }
+              >
+                <Users className="size-4" />
+                Administrators
+              </NavLink>
+            ) : null}
             <NavLink
               to="/guilds"
               className={({ isActive }) =>
@@ -139,7 +196,7 @@ export function AppLayout() {
             </NavLink>
             {isPlatformAdmin ? (
               <NavLink
-                to="/platform/guilds"
+                to="/platform/bots"
                 className={({ isActive }) =>
                   cn(
                     "flex shrink-0 items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors",
@@ -150,7 +207,7 @@ export function AppLayout() {
                 }
               >
                 <ShieldCheck className="size-4" />
-                All guilds
+                Bot directory
               </NavLink>
             ) : null}
           </nav>
@@ -179,12 +236,6 @@ export function AppLayout() {
       </aside>
 
       <main className="min-w-0">
-        {isPlatformContext ? (
-          <div className="flex items-center justify-center gap-2 border-b border-violet-300/15 bg-violet-400/8 px-4 py-2 text-xs font-medium text-violet-200">
-            <ShieldCheck className="size-3.5" />
-            Platform Admin mode — changes are recorded as platform actions
-          </div>
-        ) : null}
         <div className="mx-auto w-full max-w-[1440px] px-4 py-6 sm:px-7 sm:py-8 lg:px-10">
           <Outlet />
         </div>

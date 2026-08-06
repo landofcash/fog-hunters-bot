@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
-import type { LlmGuildSettingsRecord } from "../../repositories/types";
+import type {
+  BotProfileRecord,
+  LlmInstallationSettingsRecord,
+} from "../../repositories/types";
 
 function promptAuditValue(prompt?: string | null): {
   configured: boolean;
@@ -16,16 +19,32 @@ function promptAuditValue(prompt?: string | null): {
 }
 
 export function sanitizeLlmSettingsForAudit(
-  settings: LlmGuildSettingsRecord,
+  settings: LlmInstallationSettingsRecord,
 ): Record<string, unknown> {
   const {
-    assistantPrompt,
-    gatekeeperPrompt,
+    assistantPromptOverride,
+    gatekeeperPromptOverride,
     ...nonPromptSettings
   } = settings;
 
   return {
     ...nonPromptSettings,
+    assistantPromptOverride: promptAuditValue(assistantPromptOverride),
+    gatekeeperPromptOverride: promptAuditValue(gatekeeperPromptOverride),
+  };
+}
+
+export function sanitizeBotProfileForAudit(
+  profile: BotProfileRecord,
+): Record<string, unknown> {
+  const {
+    assistantPrompt,
+    gatekeeperPrompt,
+    ...nonPromptProfile
+  } = profile;
+
+  return {
+    ...nonPromptProfile,
     assistantPrompt: promptAuditValue(assistantPrompt),
     gatekeeperPrompt: promptAuditValue(gatekeeperPrompt),
   };

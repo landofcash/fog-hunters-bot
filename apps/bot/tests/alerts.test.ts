@@ -9,10 +9,8 @@ import { createLoggerMock } from "./helpers/fixtures";
 describe("bot operational alerts", () => {
   it("treats an empty optional webhook variable as disabled", () => {
     const config = loadConfig({
-      DISCORD_BOT_TOKEN: "token",
-      DISCORD_CLIENT_ID: "client",
       API_BASE_URL: "https://api.test/api/v1",
-      API_INTERNAL_KEY: "internal-key-long-enough",
+      BOT_POOL_BOOTSTRAP_KEY: "pool-bootstrap-key-at-least-32-characters",
       ALERT_DISCORD_WEBHOOK_URL: "",
     });
     expect(config.alertDiscordWebhookUrl).toBeUndefined();

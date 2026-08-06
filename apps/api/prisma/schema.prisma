@@ -26,7 +26,6 @@ enum PlatformRole {
 enum GuildStatus {
   ACTIVE
   DISABLED
-  LEFT
 
   @@map("guild_status")
 }
@@ -37,6 +36,56 @@ enum MemberStatus {
   REMOVED
 
   @@map("member_status")
+}
+
+enum BotDesiredStatus {
+  DRAFT
+  ACTIVE
+  DISABLED
+
+  @@map("bot_desired_status")
+}
+
+enum BotInstallationPresenceStatus {
+  PRESENT
+  LEFT
+
+  @@map("bot_installation_presence_status")
+}
+
+enum BotInstallationOperationalStatus {
+  ENABLED
+  DISABLED
+
+  @@map("bot_installation_operational_status")
+}
+
+enum BotRuntimeState {
+  STOPPED
+  CLAIMED
+  CONNECTING
+  READY
+  BACKOFF
+  ERROR
+  QUARANTINED
+
+  @@map("bot_runtime_state")
+}
+
+enum DiscordEventType {
+  MESSAGE_CREATE
+  INTERACTION_CREATE
+
+  @@map("discord_event_type")
+}
+
+enum DiscordEventProcessingStatus {
+  RECEIVED
+  PROCESSING
+  COMPLETED
+  FAILED
+
+  @@map("discord_event_processing_status")
 }
 
 enum JobStatus {
@@ -80,24 +129,106 @@ enum LlmGenerationStatus {
   @@map("llm_generation_status")
 }
 
+model BotInstance {
+  id                   String                @id(map: "pk_bot_instances") @db.Uuid
+  slug                 String                @unique(map: "ux_bot_instances_slug")
+  displayName          String                @map("display_name")
+  discordApplicationId String                @unique(map: "ux_bot_instances_discord_application_id") @map("discord_application_id")
+  discordBotUserId     String?               @unique(map: "ux_bot_instances_discord_bot_user_id") @map("discord_bot_user_id")
+  discordUsername      String?               @map("discord_username")
+  discordAvatarUrl     String?               @map("discord_avatar_url")
+  desiredStatus        BotDesiredStatus      @default(DRAFT) @map("desired_status")
+  tokenVersion         Int                   @default(0) @map("token_version")
+  createdAt            DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  profile              BotProfile?
+  tokenSecret          BotTokenSecret?
+  runtimeLease         BotRuntimeLease?
+  installations        BotInstallation[]
+  conversations        LlmConversation[]
+  generations          LlmGeneration[]
+  moderationEvents     LlmModerationEvent[]
+  auditLogs            AuditLog[]            @relation("AuditBot")
+  jobRuns              JobRun[]              @relation("JobBot")
+  webhookDeliveries    WebhookDelivery[]     @relation("WebhookBot")
+  eventReceipts        DiscordEventReceipt[]
+
+  @@index([desiredStatus], map: "ix_bot_instances_desired_status")
+  @@map("bot_instances")
+}
+
+model BotProfile {
+  id               String      @id(map: "pk_bot_profiles") @db.Uuid
+  botInstanceId    String      @unique(map: "ux_bot_profiles_bot_instance_id") @map("bot_instance_id") @db.Uuid
+  defaultModel     String      @default("gpt-4.1-mini") @map("default_model")
+  assistantPrompt  String?     @map("assistant_prompt")
+  gatekeeperPrompt String?     @map("gatekeeper_prompt")
+  dmEnabled        Boolean     @default(true) @map("dm_enabled")
+  retentionDays    Int         @default(90) @map("retention_days")
+  maxInputChars    Int         @default(4000) @map("max_input_chars")
+  maxOutputTokens  Int         @default(512) @map("max_output_tokens")
+  settingsVersion  Int         @default(1) @map("settings_version")
+  createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  botInstance      BotInstance @relation(fields: [botInstanceId], references: [id], onDelete: Cascade, map: "fk_bot_profiles_bot_instances")
+
+  @@map("bot_profiles")
+}
+
+model BotTokenSecret {
+  id                   String      @id(map: "pk_bot_token_secrets") @db.Uuid
+  botInstanceId        String      @unique(map: "ux_bot_token_secrets_bot_instance_id") @map("bot_instance_id") @db.Uuid
+  ciphertext           Bytes
+  nonce                Bytes
+  authenticationTag    Bytes       @map("authentication_tag")
+  encryptionKeyVersion Int         @map("encryption_key_version")
+  rotatedAt            DateTime    @default(now()) @map("rotated_at") @db.Timestamptz(6)
+  rotatedByUserId      String?     @map("rotated_by_user_id") @db.Uuid
+  createdAt            DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  botInstance          BotInstance @relation(fields: [botInstanceId], references: [id], onDelete: Cascade, map: "fk_bot_token_secrets_bot_instances")
+  rotatedByUser        User?       @relation("BotTokenRotator", fields: [rotatedByUserId], references: [id], onDelete: SetNull, map: "fk_bot_token_secrets_rotated_by")
+
+  @@map("bot_token_secrets")
+}
+
+model BotRuntimeLease {
+  id                  String          @id(map: "pk_bot_runtime_leases") @db.Uuid
+  botInstanceId       String          @unique(map: "ux_bot_runtime_leases_bot_instance_id") @map("bot_instance_id") @db.Uuid
+  runtimeInstanceId   String?         @map("runtime_instance_id")
+  claimRequestId      String?         @map("claim_request_id")
+  leaseGeneration     Int             @default(0) @map("lease_generation")
+  leaseTokenHash      String?         @map("lease_token_hash")
+  runtimeState        BotRuntimeState @default(STOPPED) @map("runtime_state")
+  expiresAt           DateTime?       @map("expires_at") @db.Timestamptz(6)
+  lastHeartbeatAt     DateTime?       @map("last_heartbeat_at") @db.Timestamptz(6)
+  lastConnectedAt     DateTime?       @map("last_connected_at") @db.Timestamptz(6)
+  lastErrorCode       String?         @map("last_error_code")
+  lastErrorAt         DateTime?       @map("last_error_at") @db.Timestamptz(6)
+  claimedTokenVersion Int?            @map("claimed_token_version")
+  revokedAt           DateTime?       @map("revoked_at") @db.Timestamptz(6)
+  createdAt           DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  botInstance         BotInstance     @relation(fields: [botInstanceId], references: [id], onDelete: Cascade, map: "fk_bot_runtime_leases_bot_instances")
+
+  @@index([runtimeState, expiresAt], map: "ix_bot_runtime_leases_state_expiry")
+  @@map("bot_runtime_leases")
+}
+
 model Guild {
-  id                 String              @id(map: "pk_guilds") @db.Uuid
-  discordGuildId     String              @unique(map: "ux_guilds_discord_guild_id") @map("discord_guild_id")
-  name               String
-  status             GuildStatus         @default(ACTIVE)
-  ownerDiscordUserId String?             @map("owner_discord_user_id")
-  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt          DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  members            GuildMember[]
-  featureFlags       FeatureFlag[]
-  commandPermissions CommandPermission[]
-  auditLogs          AuditLog[]
-  jobRuns            JobRun[]
-  webhookDeliveries  WebhookDelivery[]
-  llmSetting         LlmGuildSetting?
-  llmChannelSettings LlmChannelSetting[]
-  llmConversations   LlmConversation[]
-  llmGenerations     LlmGeneration[]
+  id                  String               @id(map: "pk_guilds") @db.Uuid
+  discordGuildId      String               @unique(map: "ux_guilds_discord_guild_id") @map("discord_guild_id")
+  name                String
+  status              GuildStatus          @default(ACTIVE)
+  ownerDiscordUserId  String?              @map("owner_discord_user_id")
+  createdAt           DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  members             GuildMember[]
+  installations       BotInstallation[]
+  auditLogs           AuditLog[]
+  jobRuns             JobRun[]
+  webhookDeliveries   WebhookDelivery[]
+  llmGenerations      LlmGeneration[]
   llmModerationEvents LlmModerationEvent[]
 
   @@index([status], map: "ix_guilds_status")
@@ -105,32 +236,33 @@ model Guild {
 }
 
 model User {
-  id            String         @id(map: "pk_users") @db.Uuid
-  discordUserId String         @unique(map: "ux_users_discord_user_id") @map("discord_user_id")
-  username      String?
-  globalName    String?        @map("global_name")
-  avatarUrl     String?        @map("avatar_url")
-  platformRole  PlatformRole   @default(NONE) @map("platform_role")
-  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt     DateTime       @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  memberships   GuildMember[]
-  auditLogs     AuditLog[]
-  oauthSessions OauthSession[]
+  id                     String           @id(map: "pk_users") @db.Uuid
+  discordUserId          String           @unique(map: "ux_users_discord_user_id") @map("discord_user_id")
+  username               String?
+  globalName             String?          @map("global_name")
+  avatarUrl              String?          @map("avatar_url")
+  platformRole           PlatformRole     @default(NONE) @map("platform_role")
+  createdAt              DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  memberships            GuildMember[]
+  auditLogs              AuditLog[]
+  oauthSessions          OauthSession[]
+  rotatedBotTokenSecrets BotTokenSecret[] @relation("BotTokenRotator")
 
   @@map("users")
 }
 
 model GuildMember {
-  guildId    String      @map("guild_id") @db.Uuid
-  userId     String      @map("user_id") @db.Uuid
-  tenantRole TenantRole  @default(USER) @map("tenant_role")
+  guildId    String       @map("guild_id") @db.Uuid
+  userId     String       @map("user_id") @db.Uuid
+  tenantRole TenantRole   @default(USER) @map("tenant_role")
   status     MemberStatus @default(ACTIVE)
-  joinedAt   DateTime?   @map("joined_at") @db.Timestamptz(6)
-  lastSeenAt DateTime?   @map("last_seen_at") @db.Timestamptz(6)
-  createdAt  DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt  DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  guild      Guild       @relation(fields: [guildId], references: [id], onDelete: Cascade, map: "fk_guild_members_guilds")
-  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade, map: "fk_guild_members_users")
+  joinedAt   DateTime?    @map("joined_at") @db.Timestamptz(6)
+  lastSeenAt DateTime?    @map("last_seen_at") @db.Timestamptz(6)
+  createdAt  DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  guild      Guild        @relation(fields: [guildId], references: [id], onDelete: Cascade, map: "fk_guild_members_guilds")
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade, map: "fk_guild_members_users")
 
   @@id([guildId, userId], map: "pk_guild_members")
   @@index([userId], map: "ix_guild_members_user_id")
@@ -138,80 +270,282 @@ model GuildMember {
   @@map("guild_members")
 }
 
-model FeatureFlag {
-  id         String   @id(map: "pk_feature_flags") @db.Uuid
-  guildId    String   @map("guild_id") @db.Uuid
-  featureKey String   @map("feature_key")
-  enabled    Boolean  @default(false)
-  configJson Json     @default("{}") @map("config_json")
-  version    Int      @default(1)
-  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  guild      Guild    @relation(fields: [guildId], references: [id], onDelete: Cascade, map: "fk_feature_flags_guilds")
+model BotInstallation {
+  id                       String                            @id(map: "pk_bot_installations") @db.Uuid
+  botInstanceId            String                            @map("bot_instance_id") @db.Uuid
+  guildId                  String                            @map("guild_id") @db.Uuid
+  presenceStatus           BotInstallationPresenceStatus    @default(PRESENT) @map("presence_status")
+  operationalStatus        BotInstallationOperationalStatus @default(ENABLED) @map("operational_status")
+  installedAt              DateTime                          @default(now()) @map("installed_at") @db.Timestamptz(6)
+  leftAt                   DateTime?                         @map("left_at") @db.Timestamptz(6)
+  lastSeenAt               DateTime                          @default(now()) @map("last_seen_at") @db.Timestamptz(6)
+  lastCommandManifestHash  String?                           @map("last_command_manifest_hash")
+  lastCommandSyncAt        DateTime?                         @map("last_command_sync_at") @db.Timestamptz(6)
+  lastCommandSyncErrorCode String?                           @map("last_command_sync_error_code")
+  createdAt                DateTime                          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                DateTime                          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  botInstance              BotInstance                       @relation(fields: [botInstanceId], references: [id], onDelete: Cascade, map: "fk_bot_installations_bot_instances")
+  guild                    Guild                             @relation(fields: [guildId], references: [id], onDelete: Cascade, map: "fk_bot_installations_guilds")
+  llmSetting               LlmInstallationSetting?
+  featureFlags             FeatureFlag[]
+  commandPermissions       CommandPermission[]
+  llmChannelSettings       LlmChannelSetting[]
+  conversations            LlmConversation[]                 @relation("ConversationInstallation")
+  auditLogs                AuditLog[]                         @relation("AuditInstallation")
+  jobRuns                  JobRun[]                           @relation("JobInstallation")
+  webhookDeliveries        WebhookDelivery[]                  @relation("WebhookInstallation")
+  llmGenerations           LlmGeneration[]                    @relation("GenerationInstallation")
+  llmModerationEvents      LlmModerationEvent[]               @relation("ModerationInstallation")
 
-  @@unique([guildId, featureKey], map: "ux_feature_flags_guild_feature_key")
-  @@index([guildId], map: "ix_feature_flags_guild_id")
-  @@index([guildId, enabled], map: "ix_feature_flags_guild_enabled")
+  @@unique([botInstanceId, guildId], map: "ux_bot_installations_bot_guild")
+  @@unique([id, botInstanceId], map: "ux_bot_installations_id_bot")
+  @@index([guildId, presenceStatus], map: "ix_bot_installations_guild_presence")
+  @@index([botInstanceId, presenceStatus], map: "ix_bot_installations_bot_presence")
+  @@map("bot_installations")
+}
+
+model LlmInstallationSetting {
+  id                       String          @id(map: "pk_llm_installation_settings") @db.Uuid
+  botInstallationId        String          @unique(map: "ux_llm_installation_settings_installation_id") @map("bot_installation_id") @db.Uuid
+  llmEnabledByGuild        Boolean         @default(false) @map("llm_enabled_by_guild")
+  llmEnabledByPlatform     Boolean         @default(true) @map("llm_enabled_by_platform")
+  modelOverride            String?         @map("model_override")
+  assistantPromptOverride  String?         @map("assistant_prompt_override")
+  gatekeeperPromptOverride String?         @map("gatekeeper_prompt_override")
+  retentionDaysOverride    Int?            @map("retention_days_override")
+  maxInputCharsOverride    Int?            @map("max_input_chars_override")
+  maxOutputTokensOverride  Int?            @map("max_output_tokens_override")
+  settingsVersion          Int             @default(1) @map("settings_version")
+  createdAt                DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  botInstallation          BotInstallation @relation(fields: [botInstallationId], references: [id], onDelete: Cascade, map: "fk_llm_installation_settings_installations")
+
+  @@map("llm_installation_settings")
+}
+
+model FeatureFlag {
+  id                String          @id(map: "pk_feature_flags") @db.Uuid
+  botInstallationId String          @map("bot_installation_id") @db.Uuid
+  featureKey        String          @map("feature_key")
+  enabled           Boolean         @default(false)
+  configJson        Json            @default("{}") @map("config_json")
+  version           Int             @default(1)
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  botInstallation   BotInstallation @relation(fields: [botInstallationId], references: [id], onDelete: Cascade, map: "fk_feature_flags_installations")
+
+  @@unique([botInstallationId, featureKey], map: "ux_feature_flags_installation_feature")
+  @@index([botInstallationId, enabled], map: "ix_feature_flags_installation_enabled")
   @@map("feature_flags")
 }
 
 model CommandPermission {
-  id               String     @id(map: "pk_command_permissions") @db.Uuid
-  guildId          String     @map("guild_id") @db.Uuid
-  commandKey       String     @map("command_key")
-  minRole          TenantRole @default(MODERATOR) @map("min_role")
-  allowChannelsJson Json      @default("[]") @map("allow_channels_json")
-  denyChannelsJson  Json      @default("[]") @map("deny_channels_json")
-  createdAt        DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime   @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  guild            Guild      @relation(fields: [guildId], references: [id], onDelete: Cascade, map: "fk_command_permissions_guilds")
+  id                String          @id(map: "pk_command_permissions") @db.Uuid
+  botInstallationId String          @map("bot_installation_id") @db.Uuid
+  commandKey        String          @map("command_key")
+  minRole           TenantRole      @default(MODERATOR) @map("min_role")
+  allowChannelsJson Json            @default("[]") @map("allow_channels_json")
+  denyChannelsJson  Json            @default("[]") @map("deny_channels_json")
+  createdAt         DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  botInstallation   BotInstallation @relation(fields: [botInstallationId], references: [id], onDelete: Cascade, map: "fk_command_permissions_installations")
 
-  @@unique([guildId, commandKey], map: "ux_command_permissions_guild_command_key")
-  @@index([guildId], map: "ix_command_permissions_guild_id")
+  @@unique([botInstallationId, commandKey], map: "ux_command_permissions_installation_command")
+  @@index([botInstallationId], map: "ix_command_permissions_installation_id")
   @@map("command_permissions")
 }
 
+model LlmChannelSetting {
+  id                   String          @id(map: "pk_llm_channel_settings") @db.Uuid
+  botInstallationId    String          @map("bot_installation_id") @db.Uuid
+  discordChannelId     String          @map("discord_channel_id")
+  enabled              Boolean         @default(false)
+  respondOnMentionOnly Boolean         @default(false) @map("respond_on_mention_only")
+  createdAt            DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  botInstallation      BotInstallation @relation(fields: [botInstallationId], references: [id], onDelete: Cascade, map: "fk_llm_channel_settings_installations")
+
+  @@unique([botInstallationId, discordChannelId], map: "ux_llm_channel_settings_installation_channel")
+  @@index([botInstallationId], map: "ix_llm_channel_settings_installation_id")
+  @@map("llm_channel_settings")
+}
+
+model LlmConversation {
+  id                String              @id(map: "pk_llm_conversations") @db.Uuid
+  botInstanceId     String              @map("bot_instance_id") @db.Uuid
+  botInstallationId String?             @map("bot_installation_id") @db.Uuid
+  discordChannelId  String?             @map("discord_channel_id")
+  discordUserId     String?             @map("discord_user_id")
+  type              LlmConversationType
+  summaryText       String?             @map("summary_text")
+  lastMessageAt     DateTime            @default(now()) @map("last_message_at") @db.Timestamptz(6)
+  createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  botInstance       BotInstance         @relation(fields: [botInstanceId], references: [id], onDelete: Cascade, map: "fk_llm_conversations_bot_instances")
+  botInstallation   BotInstallation?    @relation("ConversationInstallation", fields: [botInstallationId, botInstanceId], references: [id, botInstanceId], onDelete: Cascade, map: "fk_llm_conversations_installation_bot")
+  messages          LlmMessage[]
+  generations       LlmGeneration[]
+  moderationEvents  LlmModerationEvent[]
+
+  @@unique([botInstallationId, discordChannelId, type], map: "ux_llm_conversations_installation_channel_type")
+  @@unique([botInstanceId, discordUserId, type], map: "ux_llm_conversations_bot_user_type")
+  @@index([botInstallationId, lastMessageAt(sort: Desc)], map: "ix_llm_conversations_installation_last_message")
+  @@index([botInstanceId, discordUserId, lastMessageAt(sort: Desc)], map: "ix_llm_conversations_bot_user_last_message")
+  @@map("llm_conversations")
+}
+
+model LlmMessage {
+  id             String          @id(map: "pk_llm_messages") @db.Uuid
+  conversationId String          @map("conversation_id") @db.Uuid
+  role           LlmMessageRole
+  content        String
+  tokenCount     Int?            @map("token_count")
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  conversation   LlmConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade, map: "fk_llm_messages_conversations")
+
+  @@index([conversationId, createdAt(sort: Desc)], map: "ix_llm_messages_conversation_created")
+  @@map("llm_messages")
+}
+
+model LlmGeneration {
+  id                String              @id(map: "pk_llm_generations") @db.Uuid
+  conversationId    String              @map("conversation_id") @db.Uuid
+  botInstanceId     String              @map("bot_instance_id") @db.Uuid
+  botInstallationId String?             @map("bot_installation_id") @db.Uuid
+  guildId           String?             @map("guild_id") @db.Uuid
+  provider          String
+  model             String
+  status            LlmGenerationStatus @default(SUCCESS)
+  inputTokens       Int                 @default(0) @map("input_tokens")
+  outputTokens      Int                 @default(0) @map("output_tokens")
+  latencyMs         Int                 @default(0) @map("latency_ms")
+  errorCode         String?             @map("error_code")
+  errorText         String?             @map("error_text")
+  createdAt         DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  conversation      LlmConversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade, map: "fk_llm_generations_conversations")
+  botInstance       BotInstance         @relation(fields: [botInstanceId], references: [id], onDelete: Cascade, map: "fk_llm_generations_bot_instances")
+  botInstallation   BotInstallation?    @relation("GenerationInstallation", fields: [botInstallationId, botInstanceId], references: [id, botInstanceId], onDelete: Restrict, map: "fk_llm_generations_installation_bot")
+  guild             Guild?              @relation(fields: [guildId], references: [id], onDelete: SetNull, map: "fk_llm_generations_guilds")
+
+  @@index([botInstallationId, createdAt(sort: Desc)], map: "ix_llm_generations_installation_created")
+  @@index([botInstanceId, createdAt(sort: Desc)], map: "ix_llm_generations_bot_created")
+  @@index([conversationId, createdAt(sort: Desc)], map: "ix_llm_generations_conversation_created")
+  @@map("llm_generations")
+}
+
+model LlmModerationEvent {
+  id                String           @id(map: "pk_llm_moderation_events") @db.Uuid
+  botInstanceId     String           @map("bot_instance_id") @db.Uuid
+  botInstallationId String?          @map("bot_installation_id") @db.Uuid
+  guildId           String?          @map("guild_id") @db.Uuid
+  conversationId    String?          @map("conversation_id") @db.Uuid
+  category          String
+  action            String
+  detailsJson       Json             @default("{}") @map("details_json")
+  createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  botInstance       BotInstance      @relation(fields: [botInstanceId], references: [id], onDelete: Cascade, map: "fk_llm_moderation_events_bot_instances")
+  botInstallation   BotInstallation? @relation("ModerationInstallation", fields: [botInstallationId, botInstanceId], references: [id, botInstanceId], onDelete: Restrict, map: "fk_llm_moderation_events_installation_bot")
+  guild             Guild?           @relation(fields: [guildId], references: [id], onDelete: SetNull, map: "fk_llm_moderation_events_guilds")
+  conversation      LlmConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull, map: "fk_llm_moderation_events_conversations")
+
+  @@index([botInstallationId, createdAt(sort: Desc)], map: "ix_llm_moderation_events_installation_created")
+  @@index([botInstanceId, createdAt(sort: Desc)], map: "ix_llm_moderation_events_bot_created")
+  @@index([conversationId, createdAt(sort: Desc)], map: "ix_llm_moderation_events_conversation_created")
+  @@map("llm_moderation_events")
+}
+
 model AuditLog {
-  id          String         @id(map: "pk_audit_logs") @db.Uuid
-  guildId     String         @map("guild_id") @db.Uuid
-  actorUserId String?        @map("actor_user_id") @db.Uuid
-  actorType   AuditActorType @map("actor_type")
-  action      String
-  entityType  String         @map("entity_type")
-  entityId    String         @map("entity_id")
-  beforeJson  Json?          @map("before_json")
-  afterJson   Json?          @map("after_json")
-  metadataJson Json          @default("{}") @map("metadata_json")
-  createdAt   DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
-  guild       Guild          @relation(fields: [guildId], references: [id], onDelete: Restrict, map: "fk_audit_logs_guilds")
-  actorUser   User?          @relation(fields: [actorUserId], references: [id], onDelete: SetNull, map: "fk_audit_logs_users")
+  id                String           @id(map: "pk_audit_logs") @db.Uuid
+  guildId           String?          @map("guild_id") @db.Uuid
+  botInstanceId     String?          @map("bot_instance_id") @db.Uuid
+  botInstallationId String?          @map("bot_installation_id") @db.Uuid
+  actorUserId       String?          @map("actor_user_id") @db.Uuid
+  actorType         AuditActorType   @map("actor_type")
+  action            String
+  entityType        String           @map("entity_type")
+  entityId          String           @map("entity_id")
+  beforeJson        Json?            @map("before_json")
+  afterJson         Json?            @map("after_json")
+  metadataJson      Json             @default("{}") @map("metadata_json")
+  createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  guild             Guild?           @relation(fields: [guildId], references: [id], onDelete: Restrict, map: "fk_audit_logs_guilds")
+  botInstance       BotInstance?     @relation("AuditBot", fields: [botInstanceId], references: [id], onDelete: Restrict, map: "fk_audit_logs_bot_instances")
+  botInstallation   BotInstallation? @relation("AuditInstallation", fields: [botInstallationId, botInstanceId], references: [id, botInstanceId], onDelete: Restrict, map: "fk_audit_logs_installation_bot")
+  actorUser         User?            @relation(fields: [actorUserId], references: [id], onDelete: SetNull, map: "fk_audit_logs_users")
 
   @@index([guildId, createdAt(sort: Desc)], map: "ix_audit_logs_guild_created")
-  @@index([guildId, action, createdAt(sort: Desc)], map: "ix_audit_logs_guild_action")
+  @@index([botInstanceId, createdAt(sort: Desc)], map: "ix_audit_logs_bot_created")
+  @@index([botInstallationId, createdAt(sort: Desc)], map: "ix_audit_logs_installation_created")
   @@index([actorUserId, createdAt(sort: Desc)], map: "ix_audit_logs_actor")
   @@map("audit_logs")
 }
 
 model JobRun {
-  id          String    @id(map: "pk_job_runs") @db.Uuid
-  guildId     String    @map("guild_id") @db.Uuid
-  jobType     String    @map("job_type")
-  status      JobStatus @default(QUEUED)
-  attempts    Int       @default(0)
-  maxAttempts Int       @default(10) @map("max_attempts")
-  payloadJson Json      @default("{}") @map("payload_json")
-  resultJson  Json?     @map("result_json")
-  errorText   String?   @map("error_text")
-  scheduledAt DateTime  @default(now()) @map("scheduled_at") @db.Timestamptz(6)
-  startedAt   DateTime? @map("started_at") @db.Timestamptz(6)
-  finishedAt  DateTime? @map("finished_at") @db.Timestamptz(6)
-  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  guild       Guild     @relation(fields: [guildId], references: [id], onDelete: Restrict, map: "fk_job_runs_guilds")
+  id                String           @id(map: "pk_job_runs") @db.Uuid
+  guildId           String?          @map("guild_id") @db.Uuid
+  botInstanceId     String?          @map("bot_instance_id") @db.Uuid
+  botInstallationId String?          @map("bot_installation_id") @db.Uuid
+  jobType           String           @map("job_type")
+  status            JobStatus        @default(QUEUED)
+  attempts          Int              @default(0)
+  maxAttempts       Int              @default(10) @map("max_attempts")
+  payloadJson       Json             @default("{}") @map("payload_json")
+  resultJson        Json?            @map("result_json")
+  errorText         String?          @map("error_text")
+  scheduledAt       DateTime         @default(now()) @map("scheduled_at") @db.Timestamptz(6)
+  startedAt         DateTime?        @map("started_at") @db.Timestamptz(6)
+  finishedAt        DateTime?        @map("finished_at") @db.Timestamptz(6)
+  createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime         @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  guild             Guild?           @relation(fields: [guildId], references: [id], onDelete: Restrict, map: "fk_job_runs_guilds")
+  botInstance       BotInstance?     @relation("JobBot", fields: [botInstanceId], references: [id], onDelete: Restrict, map: "fk_job_runs_bot_instances")
+  botInstallation   BotInstallation? @relation("JobInstallation", fields: [botInstallationId, botInstanceId], references: [id, botInstanceId], onDelete: Restrict, map: "fk_job_runs_installation_bot")
 
   @@index([guildId, status, createdAt(sort: Desc)], map: "ix_job_runs_guild_status")
+  @@index([botInstallationId, status, createdAt(sort: Desc)], map: "ix_job_runs_installation_status")
   @@index([status, scheduledAt], map: "ix_job_runs_schedule")
   @@map("job_runs")
+}
+
+model WebhookDelivery {
+  id                String           @id(map: "pk_webhook_deliveries") @db.Uuid
+  guildId           String?          @map("guild_id") @db.Uuid
+  botInstanceId     String?          @map("bot_instance_id") @db.Uuid
+  botInstallationId String?          @map("bot_installation_id") @db.Uuid
+  eventType         String           @map("event_type")
+  targetUrl         String           @map("target_url")
+  payloadJson       Json             @map("payload_json")
+  status            String
+  attempts          Int              @default(0)
+  lastError         String?          @map("last_error")
+  createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  guild             Guild?           @relation(fields: [guildId], references: [id], onDelete: Restrict, map: "fk_webhook_deliveries_guilds")
+  botInstance       BotInstance?     @relation("WebhookBot", fields: [botInstanceId], references: [id], onDelete: Restrict, map: "fk_webhook_deliveries_bot_instances")
+  botInstallation   BotInstallation? @relation("WebhookInstallation", fields: [botInstallationId, botInstanceId], references: [id, botInstanceId], onDelete: Restrict, map: "fk_webhook_deliveries_installation_bot")
+
+  @@index([botInstallationId, createdAt(sort: Desc)], map: "ix_webhook_deliveries_installation_created")
+  @@map("webhook_deliveries")
+}
+
+model DiscordEventReceipt {
+  id                   String                       @id(map: "pk_discord_event_receipts") @db.Uuid
+  botInstanceId        String                       @map("bot_instance_id") @db.Uuid
+  discordEventId       String                       @map("discord_event_id")
+  eventType            DiscordEventType             @map("event_type")
+  leaseGeneration      Int                          @map("lease_generation")
+  acquisitionRequestId String                       @map("acquisition_request_id") @db.Uuid
+  processingStatus     DiscordEventProcessingStatus @default(RECEIVED) @map("processing_status")
+  attemptCount         Int                          @default(1) @map("attempt_count")
+  lastErrorCode        String?                      @map("last_error_code")
+  expiresAt            DateTime                     @map("expires_at") @db.Timestamptz(6)
+  createdAt            DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime                     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  botInstance          BotInstance                  @relation(fields: [botInstanceId], references: [id], onDelete: Cascade, map: "fk_discord_event_receipts_bot_instances")
+
+  @@unique([botInstanceId, discordEventId, eventType], map: "ux_discord_event_receipts_bot_event_type")
+  @@index([expiresAt], map: "ix_discord_event_receipts_expiry")
+  @@index([botInstanceId, processingStatus, updatedAt], map: "ix_discord_event_receipts_bot_processing")
+  @@map("discord_event_receipts")
 }
 
 model OauthSession {
@@ -227,125 +561,4 @@ model OauthSession {
   @@index([userId], map: "ix_oauth_sessions_user_id")
   @@index([expiresAt], map: "ix_oauth_sessions_expires_at")
   @@map("oauth_sessions")
-}
-
-model WebhookDelivery {
-  id          String   @id(map: "pk_webhook_deliveries") @db.Uuid
-  guildId     String   @map("guild_id") @db.Uuid
-  eventType   String   @map("event_type")
-  targetUrl   String   @map("target_url")
-  payloadJson Json     @map("payload_json")
-  status      String
-  attempts    Int      @default(0)
-  lastError   String?  @map("last_error")
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  guild       Guild    @relation(fields: [guildId], references: [id], onDelete: Restrict, map: "fk_webhook_deliveries_guilds")
-
-  @@map("webhook_deliveries")
-}
-
-model LlmGuildSetting {
-  id               String   @id(map: "pk_llm_guild_settings") @db.Uuid
-  guildId          String   @unique(map: "ux_llm_guild_settings_guild_id") @map("guild_id") @db.Uuid
-  enabled          Boolean  @default(false)
-  platformEnabled  Boolean  @default(true) @map("platform_enabled")
-  defaultModel     String   @default("gpt-4.1-mini") @map("default_model")
-  assistantPrompt  String?  @map("assistant_prompt")
-  gatekeeperPrompt String?  @map("gatekeeper_prompt")
-  retentionDays    Int      @default(90) @map("retention_days")
-  dmEnabled        Boolean  @default(true) @map("dm_enabled")
-  maxInputChars    Int      @default(4000) @map("max_input_chars")
-  maxOutputTokens  Int      @default(512) @map("max_output_tokens")
-  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  guild            Guild    @relation(fields: [guildId], references: [id], onDelete: Cascade, map: "fk_llm_guild_settings_guilds")
-
-  @@map("llm_guild_settings")
-}
-
-model LlmChannelSetting {
-  id                   String   @id(map: "pk_llm_channel_settings") @db.Uuid
-  guildId              String   @map("guild_id") @db.Uuid
-  discordChannelId     String   @map("discord_channel_id")
-  enabled              Boolean  @default(false)
-  respondOnMentionOnly Boolean  @default(false) @map("respond_on_mention_only")
-  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt            DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  guild                Guild    @relation(fields: [guildId], references: [id], onDelete: Cascade, map: "fk_llm_channel_settings_guilds")
-
-  @@unique([guildId, discordChannelId], map: "ux_llm_channel_settings_guild_channel")
-  @@index([guildId], map: "ix_llm_channel_settings_guild_id")
-  @@map("llm_channel_settings")
-}
-
-model LlmConversation {
-  id               String              @id(map: "pk_llm_conversations") @db.Uuid
-  guildId          String?             @map("guild_id") @db.Uuid
-  discordChannelId String?             @map("discord_channel_id")
-  discordUserId    String?             @map("discord_user_id")
-  type             LlmConversationType
-  summaryText      String?             @map("summary_text")
-  lastMessageAt    DateTime            @default(now()) @map("last_message_at") @db.Timestamptz(6)
-  createdAt        DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-  guild            Guild?              @relation(fields: [guildId], references: [id], onDelete: Cascade, map: "fk_llm_conversations_guilds")
-  messages         LlmMessage[]
-  generations      LlmGeneration[]
-  moderationEvents LlmModerationEvent[]
-
-  @@unique([guildId, discordChannelId, type], map: "ux_llm_conversations_guild_channel_type")
-  @@unique([discordUserId, type], map: "ux_llm_conversations_user_type")
-  @@index([guildId, lastMessageAt(sort: Desc)], map: "ix_llm_conversations_guild_last_message")
-  @@index([discordUserId, lastMessageAt(sort: Desc)], map: "ix_llm_conversations_user_last_message")
-  @@map("llm_conversations")
-}
-
-model LlmMessage {
-  id             String         @id(map: "pk_llm_messages") @db.Uuid
-  conversationId String         @map("conversation_id") @db.Uuid
-  role           LlmMessageRole
-  content        String
-  tokenCount     Int?           @map("token_count")
-  createdAt      DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
-  conversation   LlmConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade, map: "fk_llm_messages_conversations")
-
-  @@index([conversationId, createdAt(sort: Desc)], map: "ix_llm_messages_conversation_created")
-  @@map("llm_messages")
-}
-
-model LlmGeneration {
-  id             String              @id(map: "pk_llm_generations") @db.Uuid
-  conversationId String              @map("conversation_id") @db.Uuid
-  guildId        String?             @map("guild_id") @db.Uuid
-  provider       String
-  model          String
-  status         LlmGenerationStatus @default(SUCCESS)
-  inputTokens    Int                 @default(0) @map("input_tokens")
-  outputTokens   Int                 @default(0) @map("output_tokens")
-  latencyMs      Int                 @default(0) @map("latency_ms")
-  errorCode      String?             @map("error_code")
-  errorText      String?             @map("error_text")
-  createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
-  conversation   LlmConversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade, map: "fk_llm_generations_conversations")
-  guild          Guild?              @relation(fields: [guildId], references: [id], onDelete: SetNull, map: "fk_llm_generations_guilds")
-
-  @@index([guildId, createdAt(sort: Desc)], map: "ix_llm_generations_guild_created")
-  @@index([conversationId, createdAt(sort: Desc)], map: "ix_llm_generations_conversation_created")
-  @@map("llm_generations")
-}
-
-model LlmModerationEvent {
-  id             String          @id(map: "pk_llm_moderation_events") @db.Uuid
-  guildId        String?         @map("guild_id") @db.Uuid
-  conversationId String?         @map("conversation_id") @db.Uuid
-  category       String
-  action         String
-  detailsJson    Json            @default("{}") @map("details_json")
-  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
-  guild          Guild?          @relation(fields: [guildId], references: [id], onDelete: SetNull, map: "fk_llm_moderation_events_guilds")
-  conversation   LlmConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull, map: "fk_llm_moderation_events_conversations")
-
-  @@index([guildId, createdAt(sort: Desc)], map: "ix_llm_moderation_events_guild_created")
-  @@index([conversationId, createdAt(sort: Desc)], map: "ix_llm_moderation_events_conversation_created")
-  @@map("llm_moderation_events")
 }

@@ -24,11 +24,12 @@ export async function handleSettingsViewCommand(
       commandKey: "settings.view",
     });
 
-    const enabledFeatures = settings.features.filter((feature) => feature.enabled).length;
     const message = [
-      `Guild: **${settings.guild.name}**`,
-      `Features: **${enabledFeatures}/${settings.features.length}** enabled`,
-      `Command policies: **${settings.commands.length}**`,
+      `Bot: **${settings.bot.displayName}**`,
+      `Presence: **${settings.guild.presenceStatus.toLowerCase()}**`,
+      `Operational status: **${settings.guild.operationalStatus.toLowerCase()}**`,
+      `AI guild preference: **${settings.settings.llmEnabledByGuild ? "enabled" : "disabled"}**`,
+      `AI platform access: **${settings.settings.llmEnabledByPlatform ? "enabled" : "suspended"}**`,
     ].join("\n");
 
     await interaction.editReply({ content: message });

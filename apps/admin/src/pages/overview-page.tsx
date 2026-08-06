@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
 import {
   Activity,
@@ -6,14 +6,18 @@ import {
   BrainCircuit,
   Clock3,
   Hash,
+  Power,
   Server,
   ShieldAlert,
   ShieldCheck,
 } from "lucide-react";
 import { useParams } from "react-router-dom";
+import { toast } from "sonner";
 import { api } from "@/api/client";
+import { queryClient } from "@/api/query";
 import { EmptyState, ErrorState, PageHeader } from "@/components/page";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -43,27 +47,38 @@ function StatCard({
 }
 
 export function OverviewPage() {
-  const { guildId = "" } = useParams();
+  const { guildId = "", botId = "" } = useParams();
   const settings = useQuery({
-    queryKey: ["guild", guildId, "settings"],
-    queryFn: () => api.guildSettings(guildId),
+    queryKey: ["guild", guildId, "bot", botId, "settings"],
+    queryFn: () => api.guildSettings(guildId, botId),
   });
   const llm = useQuery({
-    queryKey: ["guild", guildId, "llm"],
-    queryFn: () => api.llmSettings(guildId),
+    queryKey: ["guild", guildId, "bot", botId, "llm"],
+    queryFn: () => api.llmSettings(guildId, botId),
   });
   const audit = useQuery({
-    queryKey: ["guild", guildId, "audit"],
-    queryFn: () => api.audit(guildId),
+    queryKey: ["guild", guildId, "bot", botId, "audit"],
+    queryFn: () => api.audit(guildId, botId),
   });
   const jobs = useQuery({
-    queryKey: ["guild", guildId, "jobs"],
-    queryFn: () => api.jobs(guildId),
+    queryKey: ["guild", guildId, "bot", botId, "jobs"],
+    queryFn: () => api.jobs(guildId, botId),
   });
   const health = useQuery({
     queryKey: ["health"],
     queryFn: api.health,
     refetchInterval: 30_000,
+  });
+  const updateInstallation = useMutation({
+    mutationFn: (operationalStatus: "ENABLED" | "DISABLED") =>
+      api.updateInstallation(guildId, botId, operationalStatus),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["guild", guildId, "bot", botId],
+      });
+      toast.success("Installation operational status updated");
+    },
+    onError: (error) => toast.error(error.message),
   });
 
   if (settings.isLoading || llm.isLoading) {
@@ -91,20 +106,53 @@ export function OverviewPage() {
         title={settings.data?.guild.name ?? guildId}
         description={`Discord guild ${guildId}`}
         action={
-          llm.data?.settings.platformEnabled ? (
-            <Badge variant={llm.data.effectiveAiEnabled ? "default" : "secondary"}>
-              <ShieldCheck className="mr-1 size-3" />
-              {llm.data.effectiveAiEnabled ? "AI active" : "AI paused by guild"}
-            </Badge>
-          ) : (
-            <Badge variant="destructive">
-              <ShieldAlert className="mr-1 size-3" />
-              AI suspended
-            </Badge>
-          )
+          <div className="flex flex-wrap items-center gap-2">
+            {llm.data?.settings.platformEnabled ? (
+              <Badge variant={llm.data.effectiveAiEnabled ? "default" : "secondary"}>
+                <ShieldCheck className="mr-1 size-3" />
+                {llm.data.effectiveAiEnabled ? "AI active" : "AI paused"}
+              </Badge>
+            ) : (
+              <Badge variant="destructive">
+                <ShieldAlert className="mr-1 size-3" />
+                AI suspended
+              </Badge>
+            )}
+            {llm.data?.installation.presenceStatus === "PRESENT" ? (
+              <Button
+                size="sm"
+                variant={
+                  llm.data.installation.operationalStatus === "ENABLED"
+                    ? "destructive"
+                    : "outline"
+                }
+                disabled={updateInstallation.isPending}
+                onClick={() =>
+                  updateInstallation.mutate(
+                    llm.data!.installation.operationalStatus === "ENABLED"
+                      ? "DISABLED"
+                      : "ENABLED",
+                  )
+                }
+              >
+                <Power className="size-3.5" />
+                {llm.data.installation.operationalStatus === "ENABLED"
+                  ? "Disable operations"
+                  : "Re-enable operations"}
+              </Button>
+            ) : (
+              <Badge variant="secondary">Installation left</Badge>
+            )}
+          </div>
         }
       />
       {error ? <ErrorState error={error} /> : null}
+      {llm.data?.installation.presenceStatus === "LEFT" ? (
+        <div className="rounded-xl border border-amber-300/15 bg-amber-400/7 px-4 py-3 text-sm text-amber-100">
+          This bot has left the guild. Settings, history, and audit data are
+          read-only until Discord reports a reinstall.
+        </div>
+      ) : null}
       {!llm.data?.settings.platformEnabled ? (
         <div className="flex gap-3 rounded-xl border border-rose-300/15 bg-rose-400/7 px-4 py-3 text-sm text-rose-100">
           <ShieldAlert className="mt-0.5 size-4 shrink-0" />
