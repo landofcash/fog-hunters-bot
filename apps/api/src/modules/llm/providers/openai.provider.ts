@@ -114,7 +114,7 @@ export class OpenAiProvider implements LlmProvider {
     const generationOptions = isGpt56Model
       ? {
           max_completion_tokens: input.maxTokens,
-          reasoning_effort: "none",
+          reasoning_effort: input.reasoningEffort,
         }
       : {
           max_tokens: input.maxTokens,
@@ -132,7 +132,7 @@ export class OpenAiProvider implements LlmProvider {
             max_output_tokens: input.maxTokens,
             store: false,
             ...(isGpt56Model
-              ? { reasoning: { effort: "none" } }
+              ? { reasoning: { effort: input.reasoningEffort } }
               : { temperature: 0.7 }),
           }
         : {

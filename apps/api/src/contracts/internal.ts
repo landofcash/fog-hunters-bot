@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { llmPromptOverrideSchema } from "./llm";
+import { llmPromptOverrideSchema, reasoningEffortSchema } from "./llm";
 
 export const internalBootstrapBodySchema = z.object({
   guildName: z.string().min(1),
@@ -62,6 +62,7 @@ export const internalLlmSettingsPatchBodySchema = z.object({
   commandKey: z.string().min(1).default("ai.prompt.set"),
   enabled: z.boolean().optional(),
   defaultModel: z.string().min(1).optional(),
+  reasoningEffort: reasoningEffortSchema.optional(),
   assistantPrompt: llmPromptOverrideSchema.optional(),
   gatekeeperPrompt: llmPromptOverrideSchema.optional(),
   stylePrompt: llmPromptOverrideSchema.optional(),

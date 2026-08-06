@@ -19,6 +19,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
@@ -32,7 +39,8 @@ import {
 } from "@/lib/platform-bot-draft";
 
 const emptyProfile: BotProfileDraft = {
-  defaultModel: "gpt-4.1-mini",
+  defaultModel: "gpt-5.6-luna",
+  reasoningEffort: "low",
   assistantPrompt: null,
   gatekeeperPrompt: null,
   dmEnabled: false,
@@ -49,6 +57,10 @@ function InstallationPolicyRow({
   installation: BotInstallation;
 }) {
   const [modelOverride, setModelOverride] = useState("");
+  const models = useQuery({
+    queryKey: ["platform", "llm-models"],
+    queryFn: api.supportedModels,
+  });
   const detail = useQuery({
     queryKey: ["platform", "bots", botId, "installations", installation.id],
     queryFn: () => api.botInstallation(botId, installation.id),
@@ -127,12 +139,25 @@ function InstallationPolicyRow({
           </label>
           <div className="grid gap-1">
             <Label>Platform model override</Label>
-            <Input
-              value={modelOverride}
+            <Select
+              value={modelOverride || "inherit"}
               disabled={readOnly}
-              placeholder={`Inherit ${detail.data.profile.defaultModel}`}
-              onChange={(event) => setModelOverride(event.target.value)}
-            />
+              onValueChange={(value) => setModelOverride(value === "inherit" ? "" : value)}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder={`Inherit ${detail.data.profile.defaultModel}`} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="inherit">
+                  Inherit {detail.data.profile.defaultModel}
+                </SelectItem>
+                {models.data?.items.map((model) => (
+                  <SelectItem key={model.id} value={model.id}>
+                    {model.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <Button
             size="sm"
@@ -178,6 +203,10 @@ export function PlatformBotsPage() {
   const bots = useQuery({
     queryKey: ["platform", "bots"],
     queryFn: () => api.platformBots(),
+  });
+  const models = useQuery({
+    queryKey: ["platform", "llm-models"],
+    queryFn: api.supportedModels,
   });
   const detail = useQuery({
     queryKey: ["platform", "bots", selectedBotId],
@@ -474,10 +503,41 @@ export function PlatformBotsPage() {
               <CardHeader><CardTitle>Bot profile</CardTitle></CardHeader>
               <CardContent>
                 <fieldset disabled={saveProfile.isPending} className="space-y-5 border-0 p-0">
-                  <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="grid gap-4 sm:grid-cols-4">
                     <div className="grid gap-2">
                       <Label>Default model</Label>
-                      <Input value={draft.profile.defaultModel} onChange={(event) => updateProfileDraft({ defaultModel: event.target.value })} />
+                      <Select
+                        value={draft.profile.defaultModel}
+                        onValueChange={(defaultModel) => updateProfileDraft({ defaultModel })}
+                      >
+                        <SelectTrigger><SelectValue placeholder="Select a model" /></SelectTrigger>
+                        <SelectContent>
+                          {models.data?.items.map((model) => (
+                            <SelectItem key={model.id} value={model.id}>
+                              {model.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="grid gap-2">
+                      <Label>Final reasoning</Label>
+                      <Select
+                        value={draft.profile.reasoningEffort}
+                        onValueChange={(reasoningEffort) => updateProfileDraft({
+                          reasoningEffort: reasoningEffort as BotProfileDraft["reasoningEffort"],
+                        })}
+                      >
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">None</SelectItem>
+                          <SelectItem value="low">Low</SelectItem>
+                          <SelectItem value="medium">Medium</SelectItem>
+                          <SelectItem value="high">High</SelectItem>
+                          <SelectItem value="xhigh">Extra high</SelectItem>
+                          <SelectItem value="max">Max</SelectItem>
+                        </SelectContent>
+                      </Select>
                     </div>
                     <div className="grid gap-2">
                       <Label>Retention days</Label>

@@ -121,6 +121,7 @@ export function asLlmSettings(
       enabled: settings.llmEnabledByGuild,
       platformEnabled: settings.llmEnabledByPlatform,
       defaultModel: effective.model,
+      reasoningEffort: settings.reasoningEffortOverride ?? null,
       assistantPrompt: settings.assistantPromptOverride,
       gatekeeperPrompt: settings.gatekeeperPromptOverride,
       retentionDays: settings.retentionDaysOverride ?? null,
@@ -142,6 +143,7 @@ export function asLlmSettingsUpdatePayload(
 ) {
   return {
     llmEnabledByGuild: body.enabled,
+    reasoningEffortOverride: body.reasoningEffort,
     assistantPromptOverride: body.assistantPrompt,
     gatekeeperPromptOverride: body.gatekeeperPrompt,
     retentionDaysOverride: body.retentionDays,
@@ -310,7 +312,11 @@ export const api = {
   updatePlatformPolicy: (
     botId: string,
     installationId: string,
-    body: { llmEnabledByPlatform?: boolean; modelOverride?: string | null },
+    body: {
+      llmEnabledByPlatform?: boolean;
+      modelOverride?: string | null;
+      reasoningEffortOverride?: import("./types").ReasoningEffort | null;
+    },
   ) =>
     request(`/api/v1/platform/bots/${botId}/installations/${installationId}/policy`, {
       method: "PATCH",

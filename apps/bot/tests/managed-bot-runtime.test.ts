@@ -69,7 +69,8 @@ function createClaim(): BotClaimResponse {
     profile: {
       id: "profile-1",
       botInstanceId: "bot-1",
-      defaultModel: "gpt-test",
+      defaultModel: "gpt-5.6-luna",
+      reasoningEffort: "low",
       dmEnabled: true,
       retentionDays: 30,
       maxInputChars: 4_000,

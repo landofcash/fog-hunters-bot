@@ -25,6 +25,7 @@ export interface GuildRecord {
 }
 
 export type BotDesiredStatus = "DRAFT" | "ACTIVE" | "DISABLED";
+export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 export type BotRuntimeState =
   | "STOPPED"
   | "CLAIMED"
@@ -53,6 +54,7 @@ export interface BotProfile {
   id: string;
   botInstanceId: string;
   defaultModel: string;
+  reasoningEffort: ReasoningEffort;
   assistantPrompt?: string | null;
   gatekeeperPrompt?: string | null;
   dmEnabled: boolean;
@@ -102,6 +104,7 @@ export interface InstallationLlmSettings {
   llmEnabledByGuild: boolean;
   llmEnabledByPlatform: boolean;
   modelOverride?: string | null;
+  reasoningEffortOverride?: ReasoningEffort | null;
   assistantPromptOverride?: string | null;
   gatekeeperPromptOverride?: string | null;
   retentionDaysOverride?: number | null;
@@ -112,6 +115,7 @@ export interface InstallationLlmSettings {
 
 export interface EffectiveBotSettings {
   model: string;
+  reasoningEffort: ReasoningEffort;
   assistantPrompt?: string | null;
   gatekeeperPrompt?: string | null;
   retentionDays: number;
@@ -169,6 +173,7 @@ export interface LlmGuildSettings {
   enabled: boolean;
   platformEnabled: boolean;
   defaultModel: string;
+  reasoningEffort: ReasoningEffort | null;
   assistantPrompt?: string | null;
   gatekeeperPrompt?: string | null;
   retentionDays: number | null;

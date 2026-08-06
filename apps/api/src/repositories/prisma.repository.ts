@@ -41,6 +41,7 @@ import type {
   LlmMessageRole,
   TenantRole,
 } from "../lib/domain";
+import type { ReasoningEffort } from "../contracts/llm";
 
 const ROLE_WEIGHT: Record<TenantRole, number> = {
   USER: 1,
@@ -130,6 +131,7 @@ function mapProfile(row: any): BotProfileRecord {
     id: row.id,
     botInstanceId: row.botInstanceId,
     defaultModel: row.defaultModel,
+    reasoningEffort: row.reasoningEffort,
     assistantPrompt: row.assistantPrompt,
     gatekeeperPrompt: row.gatekeeperPrompt,
     dmEnabled: row.dmEnabled,
@@ -196,6 +198,7 @@ function mapInstallationSettings(row: any): LlmInstallationSettingsRecord {
     llmEnabledByGuild: row.llmEnabledByGuild,
     llmEnabledByPlatform: row.llmEnabledByPlatform,
     modelOverride: row.modelOverride,
+    reasoningEffortOverride: row.reasoningEffortOverride,
     assistantPromptOverride: row.assistantPromptOverride,
     gatekeeperPromptOverride: row.gatekeeperPromptOverride,
     retentionDaysOverride: row.retentionDaysOverride,
@@ -612,11 +615,12 @@ export class PrismaAppRepository implements AppRepository {
     return row ? mapProfile(row) : null;
   }
 
-  async updateBotProfile(input: { botInstanceId: string; defaultModel?: string; assistantPrompt?: string | null; gatekeeperPrompt?: string | null; dmEnabled?: boolean; retentionDays?: number; maxInputChars?: number; maxOutputTokens?: number }): Promise<BotProfileRecord> {
+  async updateBotProfile(input: { botInstanceId: string; defaultModel?: string; reasoningEffort?: ReasoningEffort; assistantPrompt?: string | null; gatekeeperPrompt?: string | null; dmEnabled?: boolean; retentionDays?: number; maxInputChars?: number; maxOutputTokens?: number }): Promise<BotProfileRecord> {
     const row = await this.prisma.botProfile.update({
       where: { botInstanceId: input.botInstanceId },
       data: {
         defaultModel: input.defaultModel,
+        reasoningEffort: input.reasoningEffort,
         assistantPrompt: input.assistantPrompt,
         gatekeeperPrompt: input.gatekeeperPrompt,
         dmEnabled: input.dmEnabled,
@@ -1075,6 +1079,7 @@ export class PrismaAppRepository implements AppRepository {
     llmEnabledByGuild?: boolean;
     llmEnabledByPlatform?: boolean;
     modelOverride?: string | null;
+    reasoningEffortOverride?: ReasoningEffort | null;
     assistantPromptOverride?: string | null;
     gatekeeperPromptOverride?: string | null;
     retentionDaysOverride?: number | null;
@@ -1088,6 +1093,7 @@ export class PrismaAppRepository implements AppRepository {
         llmEnabledByGuild: input.llmEnabledByGuild,
         llmEnabledByPlatform: input.llmEnabledByPlatform,
         modelOverride: input.modelOverride,
+        reasoningEffortOverride: input.reasoningEffortOverride,
         assistantPromptOverride: input.assistantPromptOverride,
         gatekeeperPromptOverride: input.gatekeeperPromptOverride,
         retentionDaysOverride: input.retentionDaysOverride,
@@ -1110,6 +1116,7 @@ export class PrismaAppRepository implements AppRepository {
         bot,
         profile,
         model: profile.defaultModel,
+        reasoningEffort: profile.reasoningEffort,
         assistantPrompt: profile.assistantPrompt,
         gatekeeperPrompt: profile.gatekeeperPrompt,
         retentionDays: profile.retentionDays,
@@ -1126,6 +1133,7 @@ export class PrismaAppRepository implements AppRepository {
       installation: scoped.installation,
       installationSettings: settings,
       model: settings.modelOverride ?? profile.defaultModel,
+      reasoningEffort: settings.reasoningEffortOverride ?? profile.reasoningEffort,
       assistantPrompt: settings.assistantPromptOverride ?? profile.assistantPrompt,
       gatekeeperPrompt: settings.gatekeeperPromptOverride ?? profile.gatekeeperPrompt,
       retentionDays: settings.retentionDaysOverride ?? profile.retentionDays,

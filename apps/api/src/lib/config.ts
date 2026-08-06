@@ -47,7 +47,7 @@ const envSchema = z.object({
   LLM_DEFAULT_MODEL: z.string()
     .min(1)
     .refine(isSupportedLlmModel, "LLM_DEFAULT_MODEL must be a supported model.")
-    .default("gpt-4.1-mini"),
+    .default("gpt-5.6-luna"),
   OPENAI_API_KEY: z.string().optional(),
   LLM_MAX_INPUT_CHARS: z.coerce.number().int().positive().default(4000),
   LLM_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(512),

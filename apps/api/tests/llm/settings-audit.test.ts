@@ -12,6 +12,7 @@ describe("LLM audit sanitizers", () => {
       llmEnabledByGuild: true,
       llmEnabledByPlatform: true,
       modelOverride: null,
+      reasoningEffortOverride: null,
       assistantPromptOverride: "private assistant instructions",
       gatekeeperPromptOverride: null,
       retentionDaysOverride: 30,
@@ -41,7 +42,8 @@ describe("LLM audit sanitizers", () => {
     const sanitized = sanitizeBotProfileForAudit({
       id: "profile-id",
       botInstanceId: "bot-id",
-      defaultModel: "gpt-4.1-mini",
+      defaultModel: "gpt-5.6-luna",
+      reasoningEffort: "low",
       assistantPrompt: null,
       gatekeeperPrompt: "private gatekeeper instructions",
       dmEnabled: false,

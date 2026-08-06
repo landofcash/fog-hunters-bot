@@ -16,6 +16,7 @@ export interface PlatformBotDraft {
 export function toBotProfileDraft(profile: BotProfile): BotProfileDraft {
   return {
     defaultModel: profile.defaultModel,
+    reasoningEffort: profile.reasoningEffort,
     assistantPrompt: profile.assistantPrompt ?? null,
     gatekeeperPrompt: profile.gatekeeperPrompt ?? null,
     dmEnabled: profile.dmEnabled,
@@ -31,6 +32,7 @@ export function botProfileDraftEquals(
 ): boolean {
   return (
     draft.defaultModel === profile.defaultModel
+    && draft.reasoningEffort === profile.reasoningEffort
     && (draft.assistantPrompt ?? null) === (profile.assistantPrompt ?? null)
     && (draft.gatekeeperPrompt ?? null) === (profile.gatekeeperPrompt ?? null)
     && draft.dmEnabled === profile.dmEnabled

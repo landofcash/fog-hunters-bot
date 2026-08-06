@@ -160,7 +160,8 @@ model BotInstance {
 model BotProfile {
   id               String      @id(map: "pk_bot_profiles") @db.Uuid
   botInstanceId    String      @unique(map: "ux_bot_profiles_bot_instance_id") @map("bot_instance_id") @db.Uuid
-  defaultModel     String      @default("gpt-4.1-mini") @map("default_model")
+  defaultModel     String      @default("gpt-5.6-luna") @map("default_model")
+  reasoningEffort  String      @default("low") @map("reasoning_effort")
   assistantPrompt  String?     @map("assistant_prompt")
   gatekeeperPrompt String?     @map("gatekeeper_prompt")
   dmEnabled        Boolean     @default(true) @map("dm_enabled")
@@ -310,6 +311,7 @@ model LlmInstallationSetting {
   llmEnabledByGuild        Boolean         @default(false) @map("llm_enabled_by_guild")
   llmEnabledByPlatform     Boolean         @default(true) @map("llm_enabled_by_platform")
   modelOverride            String?         @map("model_override")
+  reasoningEffortOverride  String?         @map("reasoning_effort_override")
   assistantPromptOverride  String?         @map("assistant_prompt_override")
   gatekeeperPromptOverride String?         @map("gatekeeper_prompt_override")
   retentionDaysOverride    Int?            @map("retention_days_override")

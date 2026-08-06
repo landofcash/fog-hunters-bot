@@ -6,6 +6,7 @@ const input = {
   messages: [{ role: "user" as const, content: "Hello" }],
   maxTokens: 42,
   timeoutMs: 100,
+  reasoningEffort: "none" as const,
 };
 
 afterEach(() => {
@@ -92,6 +93,7 @@ describe("OpenAiProvider", () => {
     const result = await new OpenAiProvider("secret", "https://llm.test/v1").generateChat({
       ...input,
       model: "gpt-5.6-terra",
+      reasoningEffort: "high",
       allowWebSearch: true,
     });
 
@@ -112,7 +114,7 @@ describe("OpenAiProvider", () => {
       tool_choice: "auto",
       max_output_tokens: 42,
       store: false,
-      reasoning: { effort: "none" },
+      reasoning: { effort: "high" },
     });
   });
 

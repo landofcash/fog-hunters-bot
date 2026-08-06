@@ -19,7 +19,7 @@ async function createBot(slug: string, applicationId: string) {
     slug,
     displayName: `Bot ${slug}`,
     discordApplicationId: applicationId,
-    defaultModel: "gpt-4.1-mini",
+    defaultModel: "gpt-5.6-luna",
   });
 }
 
@@ -790,7 +790,8 @@ describe("multi-bot repository", () => {
     ).rejects.toThrow();
     await repository.updateBotProfile({
       botInstanceId: bot.id,
-      defaultModel: "gpt-4.1-mini",
+      defaultModel: "gpt-5.6-luna",
+      reasoningEffort: "low",
       assistantPrompt: "Profile prompt",
       gatekeeperPrompt: "Profile gatekeeper",
       dmEnabled: true,
@@ -815,6 +816,7 @@ describe("multi-bot repository", () => {
       botInstanceId: bot.id,
       guildDiscordId: "domain-guild-a",
       assistantPromptOverride: "Guild A prompt",
+      reasoningEffortOverride: "high",
       retentionDaysOverride: 10,
     });
 
@@ -832,15 +834,18 @@ describe("multi-bot repository", () => {
     expect(guildA).toMatchObject({
       assistantPrompt: "Guild A prompt",
       gatekeeperPrompt: "Profile gatekeeper",
+      reasoningEffort: "high",
       retentionDays: 10,
     });
     expect(guildB).toMatchObject({
       assistantPrompt: "Profile prompt",
+      reasoningEffort: "low",
       retentionDays: 45,
     });
     expect(dm).toMatchObject({
       assistantPrompt: "Profile prompt",
       dmEnabled: true,
+      reasoningEffort: "low",
     });
 
     await repository.updateInstallationOperationalStatus({
@@ -1610,7 +1615,7 @@ describe("multi-bot API contracts", () => {
         method: "PATCH",
         url: `/api/v1/platform/bots/${botId}/installations/${installation.installation.id}/policy`,
         headers: browserHeaders,
-        payload: { modelOverride: "gpt-4.1-mini" },
+        payload: { modelOverride: "gpt-5.6-luna" },
       });
       expect(installationPolicy.statusCode).toBe(200);
       const installationPolicyAudit = (await repository.listAuditLogs({
@@ -2049,7 +2054,8 @@ describe("multi-bot API contracts", () => {
         url: `/api/v1/platform/bots/${botId}/profile`,
         headers: browserHeaders,
         payload: {
-          defaultModel: "gpt-4.1-mini",
+          defaultModel: "gpt-5.6-luna",
+          reasoningEffort: "low",
           assistantPrompt: profileAssistantPrompt,
           gatekeeperPrompt: profileGatekeeperPrompt,
           dmEnabled: false,

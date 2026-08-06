@@ -97,7 +97,8 @@ function claim(botInstanceId: string) {
     profile: {
       id: `profile-${botInstanceId}`,
       botInstanceId,
-      defaultModel: "gpt-4.1-mini",
+      defaultModel: "gpt-5.6-luna",
+      reasoningEffort: "low",
       dmEnabled: false,
       retentionDays: 30,
       maxInputChars: 4_000,

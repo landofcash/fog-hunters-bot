@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { LLM_PROMPT_MAX_LENGTH } from "../../contracts/llm";
+import { LLM_PROMPT_MAX_LENGTH, reasoningEffortSchema } from "../../contracts/llm";
 import { ApiError } from "../../lib/errors";
 import { requireAuth } from "../../middleware/auth";
 import { requireCsrf } from "../../middleware/csrf";
@@ -20,6 +20,7 @@ const installationPatch = z.object({
 }).strict();
 const guildLlmPatch = z.object({
   llmEnabledByGuild: z.boolean().optional(),
+  reasoningEffortOverride: reasoningEffortSchema.nullable().optional(),
   assistantPromptOverride: z.string().max(LLM_PROMPT_MAX_LENGTH).nullable().optional(),
   gatekeeperPromptOverride: z.string().max(LLM_PROMPT_MAX_LENGTH).nullable().optional(),
   retentionDaysOverride: z.number().int().min(1).max(3650).nullable().optional(),

@@ -6,6 +6,7 @@ export type BotRuntimeState =
   | "BACKOFF"
   | "ERROR"
   | "QUARANTINED";
+export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface BotSummary {
   id: string;
@@ -24,6 +25,7 @@ export interface BotProfileResponse {
   id: string;
   botInstanceId: string;
   defaultModel: string;
+  reasoningEffort: ReasoningEffort;
   assistantPrompt?: string | null;
   gatekeeperPrompt?: string | null;
   dmEnabled: boolean;
@@ -211,6 +213,7 @@ export interface InternalLlmSettingsResponse {
     enabled: boolean;
     platformEnabled: boolean;
     defaultModel: string;
+    reasoningEffort: ReasoningEffort;
     assistantPrompt?: string | null;
     gatekeeperPrompt?: string | null;
     retentionDays: number;

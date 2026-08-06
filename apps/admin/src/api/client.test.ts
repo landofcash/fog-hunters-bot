@@ -46,6 +46,7 @@ function installationSettingsResponse(): BotInstallationSettingsResponse {
       botInstallationId: "installation-1",
       llmEnabledByGuild: true,
       llmEnabledByPlatform: true,
+      reasoningEffortOverride: null,
       assistantPromptOverride: null,
       gatekeeperPromptOverride: null,
       retentionDaysOverride: null,
@@ -56,7 +57,8 @@ function installationSettingsResponse(): BotInstallationSettingsResponse {
     profile: {
       id: "profile-1",
       botInstanceId: "bot-1",
-      defaultModel: "gpt-4.1-mini",
+      defaultModel: "gpt-5.6-luna",
+      reasoningEffort: "low",
       dmEnabled: true,
       retentionDays: 90,
       maxInputChars: 8_000,
@@ -64,7 +66,8 @@ function installationSettingsResponse(): BotInstallationSettingsResponse {
       settingsVersion: 1,
     },
     effective: {
-      model: "gpt-4.1-mini",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "low",
       assistantPrompt: null,
       gatekeeperPrompt: null,
       retentionDays: 90,
@@ -91,6 +94,7 @@ describe("Admin LLM settings mapping", () => {
       retentionDays: null,
       maxInputChars: null,
       maxOutputTokens: null,
+      reasoningEffort: null,
     });
     expect(mapped.effective).toMatchObject({
       retentionDays: 90,
@@ -110,6 +114,7 @@ describe("Admin LLM settings mapping", () => {
       retentionDaysOverride: null,
       maxInputCharsOverride: null,
       maxOutputTokensOverride: null,
+      reasoningEffortOverride: null,
     });
   });
 });

@@ -20,6 +20,7 @@ import type {
   InternalLlmRespondResponse,
   InternalLlmSettingsResponse,
   InternalUserTouchRequest,
+  ReasoningEffort,
 } from "./contracts";
 
 interface ErrorBody {
@@ -43,6 +44,7 @@ interface EffectiveSettingsWireResponse {
   };
   effective: {
     model: string;
+    reasoningEffort: ReasoningEffort;
     assistantPrompt?: string | null;
     gatekeeperPrompt?: string | null;
     retentionDays: number;
@@ -492,6 +494,7 @@ function normalizeLlmSettings(
       enabled: settings.llmEnabledByGuild,
       platformEnabled: settings.llmEnabledByPlatform,
       defaultModel: effective.model,
+      reasoningEffort: effective.reasoningEffort,
       assistantPrompt: effective.assistantPrompt,
       gatekeeperPrompt: effective.gatekeeperPrompt,
       retentionDays: effective.retentionDays,

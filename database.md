@@ -255,7 +255,8 @@ Columns:
 - `id uuid pk`
 - `guild_id uuid not null unique fk -> guilds(id)`
 - `enabled boolean not null default false`
-- `default_model text not null default 'gpt-4.1-mini'`
+- `default_model text not null default 'gpt-5.6-luna'`
+- `reasoning_effort text not null default 'low'`
 - `assistant_prompt text null`
 - `gatekeeper_prompt text null`
 - `retention_days int not null default 90`

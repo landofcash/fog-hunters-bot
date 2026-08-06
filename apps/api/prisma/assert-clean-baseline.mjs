@@ -1,6 +1,10 @@
 import { PrismaClient } from "@prisma/client";
 
 const baselineName = "20260802000000_multi_bot_baseline";
+const supportedMigrations = new Set([
+  baselineName,
+  "20260806000000_gpt56_reasoning",
+]);
 const expectedTables = new Set([
   "audit_logs",
   "bot_installations",
@@ -64,7 +68,7 @@ try {
     process.exitCode = 0;
   } else {
     const incompatible = migrations.filter(
-      ({ migration_name }) => migration_name !== baselineName,
+      ({ migration_name }) => !supportedMigrations.has(migration_name),
     );
     if (incompatible.length > 0) {
       refuse(
@@ -82,6 +86,15 @@ try {
       refuse("the baseline migration is incomplete or rolled back");
     }
 
+    const incompleteSupportedMigration = migrations.find(
+      ({ migration_name, finished_at, rolled_back_at }) =>
+        supportedMigrations.has(migration_name)
+        && (finished_at === null || rolled_back_at !== null),
+    );
+    if (incompleteSupportedMigration) {
+      refuse(`migration is incomplete or rolled back: ${incompleteSupportedMigration.migration_name}`);
+    }
+
     const unexpectedTables = tableNames.filter((table) => !expectedTables.has(table));
     const missingTables = [...expectedTables].filter((table) => !tableNames.includes(table));
     if (unexpectedTables.length > 0 || missingTables.length > 0) {
@@ -92,7 +105,7 @@ try {
       );
     }
 
-    console.log("Baseline guard: existing multi-bot baseline confirmed.");
+    console.log("Baseline guard: supported multi-bot migration history confirmed.");
   }
 } finally {
   await prisma.$disconnect();

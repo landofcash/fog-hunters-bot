@@ -13,7 +13,8 @@ const bot = {
 const profile = {
   id: "profile-1",
   botInstanceId: "bot-1",
-  defaultModel: "gpt-4.1-mini",
+  defaultModel: "gpt-5.6-luna",
+  reasoningEffort: "low",
   assistantPrompt: "Server prompt",
   gatekeeperPrompt: null,
   dmEnabled: true,
@@ -31,6 +32,7 @@ describe("reconcilePlatformBotDraft", () => {
       displayNameDirty: true,
       profile: {
         defaultModel: profile.defaultModel,
+        reasoningEffort: profile.reasoningEffort,
         assistantPrompt: "Unsaved prompt",
         gatekeeperPrompt: profile.gatekeeperPrompt,
         dmEnabled: profile.dmEnabled,
@@ -51,6 +53,7 @@ describe("reconcilePlatformBotDraft", () => {
       displayNameDirty: false,
       profile: {
         defaultModel: profile.defaultModel,
+        reasoningEffort: profile.reasoningEffort,
         assistantPrompt: "Unsaved prompt",
         gatekeeperPrompt: profile.gatekeeperPrompt,
         dmEnabled: profile.dmEnabled,

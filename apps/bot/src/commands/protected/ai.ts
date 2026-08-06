@@ -75,6 +75,7 @@ async function handleStatus(apiClient: ApiClient, interaction: ChatInputCommandI
     `Guild preference: **${result.settings.enabled ? "enabled" : "disabled"}**`,
     `Platform access: **${result.settings.platformEnabled ? "enabled" : "suspended"}**`,
     `Model: **${result.settings.defaultModel}**`,
+    `Final answer reasoning: **${result.settings.reasoningEffort}**`,
     `Retention: **${result.settings.retentionDays} days**`,
     `DM enabled: **${result.settings.dmEnabled ? "yes" : "no"}**`,
     `Max input chars: **${result.settings.maxInputChars}**`,

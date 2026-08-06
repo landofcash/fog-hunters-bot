@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { LLM_PROMPT_MAX_LENGTH } from "../../contracts/llm";
+import { LLM_PROMPT_MAX_LENGTH, reasoningEffortSchema } from "../../contracts/llm";
 import { ApiError } from "../../lib/errors";
 import { requireAuth } from "../../middleware/auth";
 import { requireCsrf } from "../../middleware/csrf";
@@ -35,6 +35,7 @@ const patchBotBody = z.object({
 }).strict().refine((value) => Object.keys(value).length > 0);
 const profileBody = z.object({
   defaultModel: z.string().min(1),
+  reasoningEffort: reasoningEffortSchema,
   assistantPrompt: z.string().max(LLM_PROMPT_MAX_LENGTH).nullable().optional(),
   gatekeeperPrompt: z.string().max(LLM_PROMPT_MAX_LENGTH).nullable().optional(),
   dmEnabled: z.boolean(),
@@ -46,6 +47,7 @@ const tokenBody = z.object({ token: z.string().min(20).max(512) }).strict();
 const platformPolicyBody = z.object({
   llmEnabledByPlatform: z.boolean().optional(),
   modelOverride: z.string().min(1).nullable().optional(),
+  reasoningEffortOverride: reasoningEffortSchema.nullable().optional(),
 }).strict().refine((value) => Object.keys(value).length > 0);
 
 function noStore(reply: { header(name: string, value: string): unknown }): void {

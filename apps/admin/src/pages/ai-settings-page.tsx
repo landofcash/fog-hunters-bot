@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { z } from "zod";
 import { api } from "@/api/client";
 import { queryClient } from "@/api/query";
+import type { ReasoningEffort } from "@/api/types";
 import { ErrorState, PageHeader } from "@/components/page";
 import {
   AlertDialog,
@@ -40,6 +41,7 @@ import { LLM_PROMPT_MAX_LENGTH } from "@/lib/llm-limits";
 const settingsSchema = z.object({
   enabled: z.boolean(),
   dmEnabled: z.boolean(),
+  reasoningEffort: z.enum(["none", "low", "medium", "high", "xhigh", "max"]).nullable(),
   retentionDays: z.number().int().min(1).max(3650).nullable(),
   maxInputChars: z.number().int().min(128).max(32000).nullable(),
   maxOutputTokens: z.number().int().min(64).max(4096).nullable(),
@@ -90,6 +92,7 @@ export function AiSettingsPage() {
     defaultValues: {
       enabled: false,
       dmEnabled: false,
+      reasoningEffort: null,
       retentionDays: null,
       maxInputChars: null,
       maxOutputTokens: null,
@@ -104,6 +107,7 @@ export function AiSettingsPage() {
     form.reset({
       enabled: settings.enabled,
       dmEnabled: settings.dmEnabled,
+      reasoningEffort: settings.reasoningEffort,
       retentionDays: settings.retentionDays,
       maxInputChars: settings.maxInputChars,
       maxOutputTokens: settings.maxOutputTokens,
@@ -307,7 +311,36 @@ export function AiSettingsPage() {
               <CardTitle>Limits and retention</CardTitle>
               <CardDescription>Bound context size, output length, and retained conversation data.</CardDescription>
             </CardHeader>
-            <CardContent className="grid gap-5 sm:grid-cols-3">
+            <CardContent className="grid gap-5 sm:grid-cols-2">
+              <FormField
+                label="Final answer reasoning"
+                description={`Inherit uses the bot profile value (${llm.data?.effective.reasoningEffort ?? "unavailable"}). The gatekeeper remains fixed at none.`}
+              >
+                <Select
+                  value={form.watch("reasoningEffort") ?? "inherit"}
+                  disabled={readOnly}
+                  onValueChange={(value) =>
+                    form.setValue(
+                      "reasoningEffort",
+                      value === "inherit" ? null : value as ReasoningEffort,
+                      { shouldDirty: true },
+                    )
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="inherit">Inherit</SelectItem>
+                    <SelectItem value="none">None</SelectItem>
+                    <SelectItem value="low">Low</SelectItem>
+                    <SelectItem value="medium">Medium</SelectItem>
+                    <SelectItem value="high">High</SelectItem>
+                    <SelectItem value="xhigh">Extra high</SelectItem>
+                    <SelectItem value="max">Max</SelectItem>
+                  </SelectContent>
+                </Select>
+              </FormField>
               <FormField
                 label="Retention days"
                 description={`Blank inherits the bot profile value (${llm.data?.effective.retentionDays.toLocaleString() ?? "unavailable"}).`}
@@ -445,6 +478,12 @@ export function AiSettingsPage() {
                 </Badge>
               </div>
               <Separator />
+              <div className="flex justify-between">
+                <span className="text-slate-500">Final reasoning</span>
+                <Badge variant="outline">
+                  {llm.data?.effective.reasoningEffort ?? "Unavailable"}
+                </Badge>
+              </div>
               <div className="flex justify-between">
                 <span className="font-medium text-slate-300">Effective AI</span>
                 <Badge variant={llm.data?.effectiveAiEnabled ? "default" : "secondary"}>

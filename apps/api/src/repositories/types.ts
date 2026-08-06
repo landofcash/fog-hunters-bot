@@ -14,6 +14,7 @@ import type {
   PlatformRole,
   TenantRole,
 } from "../lib/domain";
+import type { ReasoningEffort } from "../contracts/llm";
 
 export interface DiscordProfile {
   discordUserId: string;
@@ -72,6 +73,7 @@ export interface BotProfileRecord {
   id: string;
   botInstanceId: string;
   defaultModel: string;
+  reasoningEffort: ReasoningEffort;
   assistantPrompt?: string | null;
   gatekeeperPrompt?: string | null;
   dmEnabled: boolean;
@@ -176,6 +178,7 @@ export interface LlmInstallationSettingsRecord {
   llmEnabledByGuild: boolean;
   llmEnabledByPlatform: boolean;
   modelOverride?: string | null;
+  reasoningEffortOverride?: ReasoningEffort | null;
   assistantPromptOverride?: string | null;
   gatekeeperPromptOverride?: string | null;
   retentionDaysOverride?: number | null;
@@ -191,6 +194,7 @@ export interface EffectiveBotSettings {
   installation?: BotInstallationRecord;
   installationSettings?: LlmInstallationSettingsRecord;
   model: string;
+  reasoningEffort: ReasoningEffort;
   assistantPrompt?: string | null;
   gatekeeperPrompt?: string | null;
   retentionDays: number;
@@ -337,7 +341,7 @@ export interface AppRepository {
   updateBot(input: { botInstanceId: string; displayName?: string; desiredStatus?: BotDesiredStatus }): Promise<BotInstanceRecord>;
   updateObservedBotIdentity(input: { botInstanceId: string; discordApplicationId: string; discordBotUserId: string; discordUsername: string; discordAvatarUrl?: string | null }): Promise<BotInstanceRecord>;
   getBotProfile(botInstanceId: string): Promise<BotProfileRecord | null>;
-  updateBotProfile(input: { botInstanceId: string; defaultModel?: string; assistantPrompt?: string | null; gatekeeperPrompt?: string | null; dmEnabled?: boolean; retentionDays?: number; maxInputChars?: number; maxOutputTokens?: number }): Promise<BotProfileRecord>;
+  updateBotProfile(input: { botInstanceId: string; defaultModel?: string; reasoningEffort?: ReasoningEffort; assistantPrompt?: string | null; gatekeeperPrompt?: string | null; dmEnabled?: boolean; retentionDays?: number; maxInputChars?: number; maxOutputTokens?: number }): Promise<BotProfileRecord>;
   getBotTokenSecret(botInstanceId: string): Promise<BotTokenSecretRecord | null>;
   configureBotToken(input: BotTokenSecretRecord & { rotatedByUserId?: string }): Promise<BotInstanceRecord>;
   deleteBotToken(botInstanceId: string): Promise<BotInstanceRecord>;
@@ -355,7 +359,7 @@ export interface AppRepository {
   requestCommandResync(botInstanceId: string, installationId: string): Promise<BotInstallationRecord>;
 
   getInstallationSettings(botInstanceId: string, guildDiscordId: string): Promise<{ installation: BotInstallationRecord; settings: LlmInstallationSettingsRecord; profile: BotProfileRecord }>;
-  updateInstallationSettings(input: { botInstanceId: string; guildDiscordId: string; llmEnabledByGuild?: boolean; llmEnabledByPlatform?: boolean; modelOverride?: string | null; assistantPromptOverride?: string | null; gatekeeperPromptOverride?: string | null; retentionDaysOverride?: number | null; maxInputCharsOverride?: number | null; maxOutputTokensOverride?: number | null }): Promise<LlmInstallationSettingsRecord>;
+  updateInstallationSettings(input: { botInstanceId: string; guildDiscordId: string; llmEnabledByGuild?: boolean; llmEnabledByPlatform?: boolean; modelOverride?: string | null; reasoningEffortOverride?: ReasoningEffort | null; assistantPromptOverride?: string | null; gatekeeperPromptOverride?: string | null; retentionDaysOverride?: number | null; maxInputCharsOverride?: number | null; maxOutputTokensOverride?: number | null }): Promise<LlmInstallationSettingsRecord>;
   getEffectiveBotSettings(input: { botInstanceId: string; guildDiscordId?: string }): Promise<EffectiveBotSettings>;
   getFeatureFlag(botInstanceId: string, guildDiscordId: string, featureKey: string): Promise<FeatureFlagRecord | null>;
   listFeatureFlags(botInstanceId: string, guildDiscordId: string): Promise<FeatureFlagRecord[]>;

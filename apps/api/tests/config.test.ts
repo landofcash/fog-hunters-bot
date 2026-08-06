@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../src/lib/config";
+import { SUPPORTED_LLM_MODELS } from "../src/modules/llm/models";
 
 describe("loadConfig", () => {
+  it("defaults to Luna and exposes only GPT-5.6 models", () => {
+    expect(loadConfig({ NODE_ENV: "test" }).llmDefaultModel).toBe("gpt-5.6-luna");
+    expect(SUPPORTED_LLM_MODELS.map((model) => model.id)).toEqual([
+      "gpt-5.6-luna",
+      "gpt-5.6-terra",
+      "gpt-5.6-sol",
+    ]);
+  });
+
   it("accepts a supported configured default model", () => {
     expect(loadConfig({
       NODE_ENV: "test",

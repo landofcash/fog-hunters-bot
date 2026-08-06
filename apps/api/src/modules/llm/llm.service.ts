@@ -256,6 +256,7 @@ export class LlmService {
         messages: decisionMessages,
         maxTokens: 120,
         timeoutMs: this.config.llmRequestTimeoutMs,
+        reasoningEffort: "none",
       },
       {
         phase: "gatekeeper",
@@ -475,6 +476,7 @@ export class LlmService {
           messages: promptMessages,
           maxTokens: maxOutputTokens,
           timeoutMs: this.config.llmRequestTimeoutMs,
+          reasoningEffort: settings.reasoningEffort,
           allowWebSearch: true,
         },
         {

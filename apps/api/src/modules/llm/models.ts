@@ -6,24 +6,19 @@ export interface SupportedLlmModel {
 
 export const SUPPORTED_LLM_MODELS: SupportedLlmModel[] = [
   {
+    id: "gpt-5.6-luna",
+    name: "GPT-5.6 Luna",
+    description: "Efficient model for high-volume workloads.",
+  },
+  {
     id: "gpt-5.6-terra",
     name: "GPT-5.6 Terra",
-    description: "Balanced model recommended for most guilds.",
+    description: "Balanced model for general-purpose workloads.",
   },
   {
     id: "gpt-5.6-sol",
     name: "GPT-5.6 Sol",
-    description: "Highest-quality option for demanding guilds.",
-  },
-  {
-    id: "gpt-5.6-luna",
-    name: "GPT-5.6 Luna",
-    description: "Fastest option with the lowest expected cost.",
-  },
-  {
-    id: "gpt-4.1-mini",
-    name: "GPT-4.1 mini",
-    description: "Existing compatibility default.",
+    description: "Flagship model for the most demanding workloads.",
   },
 ];
 

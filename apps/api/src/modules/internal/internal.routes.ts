@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { createHmac } from "node:crypto";
 import { z } from "zod";
-import { LLM_PROMPT_MAX_LENGTH } from "../../contracts/llm";
+import { LLM_PROMPT_MAX_LENGTH, reasoningEffortSchema } from "../../contracts/llm";
 import { ApiError, isApiError } from "../../lib/errors";
 import { requireBotLease, requirePoolCredential } from "../../middleware/internal-auth";
 import { createInternalRateLimiters } from "../../plugins/rate-limit";
@@ -85,6 +85,7 @@ const actorBody = z.object({
 }).strict();
 const llmSettingsPatch = actorBody.extend({
   llmEnabledByGuild: z.boolean().optional(),
+  reasoningEffortOverride: reasoningEffortSchema.nullable().optional(),
   assistantPromptOverride: z.string().max(LLM_PROMPT_MAX_LENGTH).nullable().optional(),
   gatekeeperPromptOverride: z.string().max(LLM_PROMPT_MAX_LENGTH).nullable().optional(),
   retentionDaysOverride: z.number().int().min(1).max(3650).nullable().optional(),
