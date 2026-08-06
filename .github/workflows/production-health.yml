@@ -19,14 +19,25 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 3
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
       - name: Check production API
         id: health
         continue-on-error: true
         env:
-          HEALTH_URL: ${{ vars.PRODUCTION_API_HEALTH_URL || 'https://api-production-8fae.up.railway.app/api/v1/health' }}
+          HEALTH_URL: ${{ vars.PRODUCTION_API_HEALTH_URL }}
         run: |
           if [ -z "$HEALTH_URL" ]; then
             echo "PRODUCTION_API_HEALTH_URL is not configured."
+            exit 1
+          fi
+
+          expected_version="$(jq -r '.version // empty' apps/api/package.json)"
+          if [ -z "$expected_version" ]; then
+            echo "apps/api/package.json does not contain a version."
             exit 1
           fi
 
@@ -38,8 +49,14 @@ jobs:
             "$HEALTH_URL")"
 
           status="$(jq -r '.status // empty' <<<"$response")"
+          deployed_version="$(jq -r '.version // empty' <<<"$response")"
           if [ "$status" != "ok" ]; then
             echo "Health endpoint did not return status=ok."
+            exit 1
+          fi
+
+          if [ "$deployed_version" != "$expected_version" ]; then
+            echo "Production API version mismatch: expected $expected_version, received ${deployed_version:-<missing>}."
             exit 1
           fi
 
@@ -48,7 +65,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           HEALTH_OUTCOME: ${{ steps.health.outcome }}
-          HEALTH_URL: ${{ vars.PRODUCTION_API_HEALTH_URL || 'https://api-production-8fae.up.railway.app/api/v1/health' }}
+          HEALTH_URL: ${{ vars.PRODUCTION_API_HEALTH_URL }}
           ALERT_TITLE: "[alert] Production API health check failed"
         run: |
           issue_number="$(gh issue list \
