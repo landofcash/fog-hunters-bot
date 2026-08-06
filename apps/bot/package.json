@@ -1,6 +1,6 @@
 {
   "name": "fhaibot-bot",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Discord bot runtime for FHAIBot",
   "main": "build/index.js",

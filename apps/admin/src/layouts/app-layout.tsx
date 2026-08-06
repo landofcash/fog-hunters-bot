@@ -42,6 +42,11 @@ export function AppLayout() {
   const location = useLocation();
   const navigate = useNavigate();
   const { data: me } = useQuery({ queryKey: ["me"], queryFn: api.me });
+  const health = useQuery({
+    queryKey: ["health"],
+    queryFn: api.health,
+    refetchInterval: 30_000,
+  });
   const isPlatformAdmin = me?.platformRole === "PLATFORM_ADMIN";
   const membership = me?.memberships.find((item) => item.guildId === guildId);
   const guildBots = useQuery({
@@ -80,7 +85,9 @@ export function AppLayout() {
             </div>
             <div>
               <div className="text-sm font-semibold tracking-wide text-white">Fog Hunters</div>
-              <div className="text-[11px] tracking-[0.16em] text-slate-500 uppercase">Control room</div>
+              <div className="text-[11px] tracking-[0.12em] text-slate-500 uppercase">
+                Control room{health.data ? ` · v${health.data.version}` : ""}
+              </div>
             </div>
           </div>
 

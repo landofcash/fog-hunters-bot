@@ -1,6 +1,6 @@
 {
   "name": "fhaibot-api",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Multi-tenant Discord bot API",
   "main": "build/index.js",

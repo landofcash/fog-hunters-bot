@@ -176,7 +176,7 @@ export const api = {
   me: () => request<MeResponse>("/api/v1/me"),
   loginUrl: () => request<{ url: string }>("/api/v1/auth/discord/login?state=dashboard"),
   logout: () => request<{ loggedOut: boolean }>("/api/v1/auth/logout", { method: "POST" }),
-  health: () => request<{ status: "ok"; timestamp: string }>("/api/v1/health"),
+  health: () => request<{ status: "ok"; version: string; timestamp: string }>("/api/v1/health"),
 
   guildBots: (guildId: string) =>
     request<{ items: GuildBotListItem[] }>(`/api/v1/guilds/${guildId}/bots`),
