@@ -8,6 +8,7 @@ export interface GenerateChatInput {
   messages: LlmChatMessage[];
   maxTokens: number;
   timeoutMs: number;
+  allowWebSearch?: boolean;
 }
 
 export interface GenerateChatOutput {

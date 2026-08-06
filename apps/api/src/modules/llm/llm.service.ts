@@ -475,6 +475,7 @@ export class LlmService {
           messages: promptMessages,
           maxTokens: maxOutputTokens,
           timeoutMs: this.config.llmRequestTimeoutMs,
+          allowWebSearch: true,
         },
         {
           phase: "generation",

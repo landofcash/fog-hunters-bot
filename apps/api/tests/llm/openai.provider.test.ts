@@ -56,6 +56,66 @@ describe("OpenAiProvider", () => {
     });
   });
 
+  it("allows web search for final generation and renders clickable citations", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      output: [
+        {
+          type: "web_search_call",
+          status: "completed",
+        },
+        {
+          type: "message",
+          content: [
+            {
+              type: "output_text",
+              text: "Fresh result. Example",
+              annotations: [
+                {
+                  type: "url_citation",
+                  start_index: 14,
+                  end_index: 21,
+                  title: "Example article",
+                  url: "https://example.com/story",
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      usage: {
+        input_tokens: 9,
+        output_tokens: 4,
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new OpenAiProvider("secret", "https://llm.test/v1").generateChat({
+      ...input,
+      model: "gpt-5.6-terra",
+      allowWebSearch: true,
+    });
+
+    expect(result).toEqual({
+      text: "Fresh result. [Example article](https://example.com/story)",
+      usage: {
+        inputTokens: 9,
+        outputTokens: 4,
+      },
+    });
+
+    const [url, request] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://llm.test/v1/responses");
+    expect(JSON.parse(String(request.body))).toEqual({
+      model: "gpt-5.6-terra",
+      input: input.messages,
+      tools: [{ type: "web_search" }],
+      tool_choice: "auto",
+      max_output_tokens: 42,
+      store: false,
+      reasoning: { effort: "none" },
+    });
+  });
+
   it("maps provider and empty-response failures", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({
       error: { message: "rate limited", type: "rate_limit" },
