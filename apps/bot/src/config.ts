@@ -15,6 +15,7 @@ const envSchema = z.object({
   ASSIGNMENT_POLL_MS: z.coerce.number().int().min(1_000).default(15_000),
   LEASE_SAFETY_MARGIN_MS: z.coerce.number().int().min(5_000).default(20_000),
   HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(5_000),
+  LLM_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(70_000),
   HTTP_RETRY_MAX: z.coerce.number().int().min(0).max(10).default(3),
   LOGIN_RETRY_MAX: z.coerce.number().int().min(0).max(10).default(5),
   LOGIN_RETRY_BASE_MS: z.coerce.number().int().positive().default(2_000),
@@ -33,6 +34,7 @@ export interface BotConfig {
   assignmentPollMs: number;
   leaseSafetyMarginMs: number;
   httpTimeoutMs: number;
+  llmHttpTimeoutMs: number;
   httpRetryMax: number;
   loginRetryMax: number;
   loginRetryBaseMs: number;
@@ -53,6 +55,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): BotConfig {
     assignmentPollMs: parsed.ASSIGNMENT_POLL_MS,
     leaseSafetyMarginMs: parsed.LEASE_SAFETY_MARGIN_MS,
     httpTimeoutMs: parsed.HTTP_TIMEOUT_MS,
+    llmHttpTimeoutMs: parsed.LLM_HTTP_TIMEOUT_MS,
     httpRetryMax: parsed.HTTP_RETRY_MAX,
     loginRetryMax: parsed.LOGIN_RETRY_MAX,
     loginRetryBaseMs: parsed.LOGIN_RETRY_BASE_MS,

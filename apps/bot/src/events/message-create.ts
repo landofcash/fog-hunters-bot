@@ -7,6 +7,15 @@ import { touchUserFromMessage } from "../runtime/user-touch";
 export const MESSAGE_BUFFER_IDLE_MS = 4_000;
 export const MESSAGE_BUFFER_MAX_WAIT_MS = 10_000;
 export const MESSAGE_BUFFER_MAX_MESSAGES = 20;
+export const DIRECT_MENTION_FAILURE_REPLY =
+  "Sorry, I couldn't complete that response in time. Please try again.";
+
+const DIRECT_MENTION_FAILURE_REASONS = new Set([
+  "EMPTY_RESPONSE",
+  "LLM_PROVIDER_EMPTY_RESPONSE",
+  "LLM_PROVIDER_ERROR",
+  "LLM_TIMEOUT",
+]);
 
 interface PendingMessageBatch {
   messages: Message[];
@@ -48,6 +57,30 @@ function compareDiscordSnowflakes(left: Message, right: Message): number {
   return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
 }
 
+async function sendMessageChunks(input: {
+  message: Message;
+  content: string;
+  logger: Logger;
+  canProcess: () => boolean;
+}): Promise<boolean> {
+  const { message, content, logger, canProcess } = input;
+  if (!("send" in message.channel) || typeof message.channel.send !== "function") {
+    return false;
+  }
+
+  for (const chunk of splitForDiscord(content)) {
+    if (!canProcess()) {
+      logger.warn(
+        { guildId: message.guildId, channelId: message.channelId },
+        "Message reply cancelled because the runtime is quarantined",
+      );
+      return false;
+    }
+    await message.channel.send({ content: chunk });
+  }
+  return true;
+}
+
 async function processMessageBatch(input: {
   messages: Message[];
   apiClient: ApiClient;
@@ -81,22 +114,36 @@ async function processMessageBatch(input: {
     });
 
     if (!response.shouldRespond || !response.replyText) {
+      if (
+        botWasMentioned
+        && response.reason
+        && DIRECT_MENTION_FAILURE_REASONS.has(response.reason)
+      ) {
+        logger.warn(
+          {
+            guildId: message.guildId,
+            channelId: message.channelId,
+            discordUserId: message.author.id,
+            reason: response.reason,
+          },
+          "Direct mention LLM response failed",
+        );
+        await sendMessageChunks({
+          message,
+          content: DIRECT_MENTION_FAILURE_REPLY,
+          logger,
+          canProcess,
+        });
+      }
       return;
     }
 
-    const chunks = splitForDiscord(response.replyText);
-    for (const chunk of chunks) {
-      if (!canProcess()) {
-        logger.warn(
-          { guildId: message.guildId, channelId: message.channelId },
-          "Message reply cancelled because the runtime is quarantined",
-        );
-        return;
-      }
-      if ("send" in message.channel && typeof message.channel.send === "function") {
-        await message.channel.send({ content: chunk });
-      }
-    }
+    await sendMessageChunks({
+      message,
+      content: response.replyText,
+      logger,
+      canProcess,
+    });
   } catch (error) {
     if (isApiClientError(error) && (error.statusCode === 403 || error.statusCode === 404)) {
       logger.debug(
@@ -121,6 +168,30 @@ async function processMessageBatch(input: {
       },
       "Failed to process message for LLM response",
     );
+
+    if (botWasMentioned) {
+      try {
+        const fallbackSent = await sendMessageChunks({
+          message,
+          content: DIRECT_MENTION_FAILURE_REPLY,
+          logger,
+          canProcess,
+        });
+        if (fallbackSent) {
+          return;
+        }
+      } catch (fallbackError) {
+        logger.warn(
+          {
+            err: fallbackError,
+            guildId: message.guildId,
+            channelId: message.channelId,
+          },
+          "Failed to send direct mention failure reply",
+        );
+      }
+    }
+
     throw error;
   }
 }

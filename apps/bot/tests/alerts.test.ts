@@ -14,6 +14,7 @@ describe("bot operational alerts", () => {
       ALERT_DISCORD_WEBHOOK_URL: "",
     });
     expect(config.alertDiscordWebhookUrl).toBeUndefined();
+    expect(config.llmHttpTimeoutMs).toBe(70_000);
   });
 
   it("delivers webhook alerts and applies a per-event cooldown", async () => {

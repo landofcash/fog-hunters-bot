@@ -32,6 +32,67 @@ describe("ApiClient", () => {
     expect(JSON.parse(String(request.body))).toMatchObject({ guildId: "guild-1", content: "hello" });
   });
 
+  it("uses the dedicated LLM timeout without retrying the generation request", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(
+      (_url: string, request: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          request.signal?.addEventListener("abort", () => {
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+          });
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createLeaseClient(createBotConfig({
+      httpTimeoutMs: 10,
+      llmHttpTimeoutMs: 25,
+      httpRetryMax: 3,
+    }));
+
+    let state: "pending" | "resolved" | "rejected" = "pending";
+    let caughtError: unknown;
+    void client.respondWithLlm({
+      guildId: "guild-1",
+      channelId: "channel-1",
+      discordUserId: "user-1",
+      content: "complex question",
+      isDm: false,
+      botWasMentioned: true,
+    }).then(
+      () => {
+        state = "resolved";
+      },
+      (error: unknown) => {
+        state = "rejected";
+        caughtError = error;
+      },
+    );
+
+    await vi.advanceTimersByTimeAsync(10);
+    expect(state).toBe("pending");
+
+    await vi.advanceTimersByTimeAsync(15);
+    expect(state).toBe("rejected");
+    expect(caughtError).toMatchObject({ name: "AbortError" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry LLM generation on server errors", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 503 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createLeaseClient(createBotConfig({ httpRetryMax: 3 }));
+
+    await expect(client.respondWithLlm({
+      guildId: "guild-1",
+      channelId: "channel-1",
+      discordUserId: "user-1",
+      content: "complex question",
+      isDm: false,
+      botWasMentioned: true,
+    })).rejects.toMatchObject({ statusCode: 503 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("maps admin management requests to protected internal endpoints", async () => {
     const fetchMock = vi.fn().mockImplementation(async () =>
       new Response(JSON.stringify({ changed: true, membership: { tenantRole: "ADMIN" } }), { status: 200 }),

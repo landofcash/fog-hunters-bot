@@ -51,7 +51,7 @@ const envSchema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   LLM_MAX_INPUT_CHARS: z.coerce.number().int().positive().default(4000),
   LLM_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(512),
-  LLM_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(15000),
+  LLM_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
   LLM_GLOBAL_KILL_SWITCH: z
     .string()
     .optional()

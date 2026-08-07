@@ -4,7 +4,9 @@ import { SUPPORTED_LLM_MODELS } from "../src/modules/llm/models";
 
 describe("loadConfig", () => {
   it("defaults to Luna and exposes only GPT-5.6 models", () => {
-    expect(loadConfig({ NODE_ENV: "test" }).llmDefaultModel).toBe("gpt-5.6-luna");
+    const config = loadConfig({ NODE_ENV: "test" });
+    expect(config.llmDefaultModel).toBe("gpt-5.6-luna");
+    expect(config.llmRequestTimeoutMs).toBe(60_000);
     expect(SUPPORTED_LLM_MODELS.map((model) => model.id)).toEqual([
       "gpt-5.6-luna",
       "gpt-5.6-terra",

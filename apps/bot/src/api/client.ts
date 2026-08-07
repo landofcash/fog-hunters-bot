@@ -59,17 +59,26 @@ interface EffectiveSettingsWireResponse {
   };
 }
 
+interface RequestOptions {
+  timeoutMs?: number;
+  retryMax?: number;
+}
+
 async function requestJson<T>(input: {
   config: BotConfig;
   logger: Logger;
   path: string;
   init: RequestInit;
   authHeaders: Record<string, string>;
+  timeoutMs?: number;
   retriesLeft?: number;
 }): Promise<T> {
   const retriesLeft = input.retriesLeft ?? input.config.httpRetryMax;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), input.config.httpTimeoutMs);
+  const timeout = setTimeout(
+    () => controller.abort(),
+    input.timeoutMs ?? input.config.httpTimeoutMs,
+  );
   try {
     const response = await fetch(`${input.config.apiBaseUrl}${input.path}`, {
       ...input.init,
@@ -149,12 +158,18 @@ export class ApiClient {
     return this.lease.botInstanceId;
   }
 
-  private request<T>(path: string, init: RequestInit): Promise<T> {
+  private request<T>(
+    path: string,
+    init: RequestInit,
+    options: RequestOptions = {},
+  ): Promise<T> {
     return requestJson<T>({
       config: this.config,
       logger: this.logger,
       path,
       init,
+      timeoutMs: options.timeoutMs,
+      retriesLeft: options.retryMax,
       authHeaders: {
         authorization: `Bearer ${this.lease.leaseToken}`,
         "x-bot-instance-id": this.lease.botInstanceId,
@@ -361,10 +376,17 @@ export class ApiClient {
   }
 
   respondWithLlm(payload: InternalLlmRespondRequest): Promise<InternalLlmRespondResponse> {
-    return this.request("/internal/llm/respond", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
+    return this.request(
+      "/internal/llm/respond",
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+      {
+        timeoutMs: this.config.llmHttpTimeoutMs,
+        retryMax: 0,
+      },
+    );
   }
 
   async readLlmGuildSettings(input: {

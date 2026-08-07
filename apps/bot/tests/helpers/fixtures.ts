@@ -14,6 +14,7 @@ export function createBotConfig(overrides: Partial<BotConfig> = {}): BotConfig {
     assignmentPollMs: 15_000,
     leaseSafetyMarginMs: 20_000,
     httpTimeoutMs: 100,
+    llmHttpTimeoutMs: 500,
     httpRetryMax: 2,
     loginRetryMax: 2,
     loginRetryBaseMs: 10,

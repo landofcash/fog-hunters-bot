@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  DIRECT_MENTION_FAILURE_REPLY,
   handleMessageCreateEvent,
   MessageResponseBuffer,
 } from "../src/events/message-create";
@@ -46,6 +47,55 @@ describe("message create event", () => {
     expect(channelSend).toHaveBeenNthCalledWith(1, { content: "x".repeat(2_000) });
     expect(channelSend).toHaveBeenNthCalledWith(2, { content: "x".repeat(2_000) });
     expect(channelSend).toHaveBeenNthCalledWith(3, { content: "x" });
+  });
+
+  it("sends a visible fallback when generation fails for a direct mention", async () => {
+    const apiClient = createApiClientMock({
+      respondWithLlm: vi.fn().mockResolvedValue({
+        shouldRespond: false,
+        reason: "LLM_TIMEOUT",
+      }),
+    });
+    const message = createMessageMock({
+      content: "<@bot-1> answer this",
+      mentions: { has: vi.fn().mockReturnValue(true) },
+    });
+
+    await handleMessageCreateEvent({
+      message,
+      apiClient,
+      logger: createLoggerMock(),
+    });
+
+    const channelSend = (message.channel as unknown as {
+      send: ReturnType<typeof vi.fn>;
+    }).send;
+    expect(channelSend).toHaveBeenCalledWith({
+      content: DIRECT_MENTION_FAILURE_REPLY,
+    });
+  });
+
+  it("sends the direct-mention fallback when the API request itself fails", async () => {
+    const apiClient = createApiClientMock({
+      respondWithLlm: vi.fn().mockRejectedValue(new Error("offline")),
+    });
+    const message = createMessageMock({
+      content: "<@bot-1> answer this",
+      mentions: { has: vi.fn().mockReturnValue(true) },
+    });
+
+    await expect(handleMessageCreateEvent({
+      message,
+      apiClient,
+      logger: createLoggerMock(),
+    })).resolves.toBeUndefined();
+
+    const channelSend = (message.channel as unknown as {
+      send: ReturnType<typeof vi.fn>;
+    }).send;
+    expect(channelSend).toHaveBeenCalledWith({
+      content: DIRECT_MENTION_FAILURE_REPLY,
+    });
   });
 
   it("silently logs expected denials and propagates unexpected failures", async () => {
@@ -188,15 +238,15 @@ describe("message response buffer", () => {
     const first = buffer.enqueueAndWait(
       createMessageMock({ id: "1", content: "First part" }),
     );
-    const second = buffer.enqueueAndWait(
-      createMessageMock({
-        id: "2",
-        content: "<@bot-1> second part",
-        mentions: { has: vi.fn().mockReturnValue(true) },
-      }),
-    );
+    const second = buffer.enqueueAndWait(createMessageMock({
+      id: "2",
+      content: "Second part",
+    }));
+    const firstRejection = expect(first).rejects.toThrow("offline");
+    const secondRejection = expect(second).rejects.toThrow("offline");
 
-    await expect(first).rejects.toThrow("offline");
-    await expect(second).rejects.toThrow("offline");
+    await vi.advanceTimersByTimeAsync(4_000);
+    await firstRejection;
+    await secondRejection;
   });
 });
